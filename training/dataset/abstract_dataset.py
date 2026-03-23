@@ -205,6 +205,7 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
                     raise ValueError(f'Label {video_info["label"]} is not found in the configuration file.')
                 label = self.config['label_dict'][video_info['label']]
                 frame_paths = video_info['frames']
+                frame_paths = [f.replace('\\', '/') for f in frame_paths]
                 # sorted video path to the lists
                 if '\\' in frame_paths[0]:
                     frame_paths = sorted(frame_paths, key=lambda x: int(x.split('\\')[-1].split('.')[0]))
@@ -281,35 +282,33 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
 
      
     def load_rgb(self, file_path):
-        """
-        Load an RGB image from a file path and resize it to a specified resolution.
-
-        Args:
-            file_path: A string indicating the path to the image file.
-
-        Returns:
-            An Image object containing the loaded and resized image.
-
-        Raises:
-            ValueError: If the loaded image is None.
-        """
-        size = self.config['resolution'] # if self.mode == "train" else self.config['resolution']
+        size = self.config['resolution']
         if not self.lmdb:
-            if not file_path[0] == '.':
-                file_path =  f'./{self.config["rgb_dir"]}\\'+file_path
+            # 1. Clean the incoming file_path (remove Windows slashes)
+            file_path = file_path.replace('\\', '/')
+            
+            # 2. Join with rgb_dir correctly without adding './'
+            # This ensures it uses the absolute path: /media/NAS/...
+            if not file_path.startswith(self.config["rgb_dir"]):
+                file_path = os.path.join(self.config["rgb_dir"], file_path).replace('\\', '/')
+
+            # 3. Final check: Ensure no double slashes like '//'
+            file_path = file_path.replace('//', '/')
+
             assert os.path.exists(file_path), f"{file_path} does not exist"
             img = cv2.imread(file_path)
             if img is None:
                 raise ValueError('Loaded image is None: {}'.format(file_path))
+                
         elif self.lmdb:
             with self.env.begin(write=False) as txn:
-                # transfer the path format from rgb-path to lmdb-key
-                if file_path[0]=='.':
-                    file_path=file_path.replace('./datasets\\','')
-
-                image_bin = txn.get(file_path.encode())
+                # Transfer the path format from rgb-path to lmdb-key
+                # Ensure Linux slashes for LMDB keys as well
+                clean_path = file_path.replace('./datasets\\', '').replace('\\', '/')
+                image_bin = txn.get(clean_path.encode())
                 image_buf = np.frombuffer(image_bin, dtype=np.uint8)
                 img = cv2.imdecode(image_buf, cv2.IMREAD_COLOR)
+
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = cv2.resize(img, (size, size), interpolation=cv2.INTER_CUBIC)
         return Image.fromarray(np.array(img, dtype=np.uint8))
@@ -477,7 +476,16 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         augmentation_seed = None
 
         for image_path in image_paths:
-            # Initialize a new seed for data augmentation at the start of each video
+            if 'dataset' in image_path:
+                # Split by 'dataset' and take everything after the last occurrence
+                image_path = image_path.split('dataset')[-1]
+            
+            # 2. Clean the slashes and leading slashes
+            image_path = image_path.replace('\\', '/').lstrip('/')
+
+            # 3. Join it properly to the config root
+            full_image_path = os.path.join(self.config['rgb_dir'], image_path)
+
             if self.video_level and image_path == image_paths[0]:
                 augmentation_seed = random.randint(0, 2**32 - 1)
 

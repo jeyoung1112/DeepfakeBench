@@ -385,7 +385,8 @@ class Trainer(object):
             if key == 'avg':
                 self.best_metrics_all_time[key]['dataset_dict'] = metric_one_dataset['dataset_dict']
             # Save checkpoint, feature, and metrics if specified in config
-            if self.config['save_ckpt'] and key not in FFpp_pool:
+            # if self.config['save_ckpt'] and key not in FFpp_pool:
+            if self.config['save_ckpt']:
                 self.save_ckpt('test', key, f"{epoch}+{iteration}")
             self.save_metrics('test', metric_one_dataset, key)
         if losses_one_dataset_recorder is not None:

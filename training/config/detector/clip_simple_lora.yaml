@@ -1,9 +1,9 @@
 # log dir 
-log_dir: /data/home/zhiyuanyan/DeepfakeBench/logs_debug/clip
+log_dir: /data/home/zhiyuanyan/DeepfakeBench/logs_debug/clip_simple_lora
 
 # model setting
 pretrained: /media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/pretrained/xception-b5690688.pth   # path to a pre-trained model, if using one
-model_name: clip   # model name
+model_name: clip_simple_lora # model name
 backbone_name: vit  # backbone name
 
 #backbone setting
@@ -21,7 +21,7 @@ test_dataset: [FaceForensics++]
 compression: c23  # compression-level for videos
 train_batchSize: 32   # training batch size
 test_batchSize: 32   # test batch size
-workers: 8   # number of data loading workers
+workers: 0   # number of data loading workers
 frame_num: {'train': 32, 'test': 32}   # number of frames to use per video in training and testing
 resolution: 224   # resolution of output image to network
 with_mask: false   # whether to include mask information in the input

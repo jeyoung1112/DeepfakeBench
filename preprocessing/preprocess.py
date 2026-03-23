@@ -233,7 +233,7 @@ def video_manipulate(
 
     # Define face detector and predictor models
     face_detector = dlib.get_frontal_face_detector()
-    predictor_path = './dlib_tools/shape_predictor_81_face_landmarks.dat'
+    predictor_path = '/media/NAS/USERS/jeyoung/dlib_tools/shape_predictor_81_face_landmarks.dat'
     ## Check if predictor path exists
     if not os.path.exists(predictor_path):
         logger.error(f"Predictor path does not exist: {predictor_path}")
