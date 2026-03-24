@@ -30,6 +30,7 @@ from torch import distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from sklearn import metrics
 from metrics.utils import get_test_metrics
+import wandb
 
 FFpp_pool=['FaceForensics++','FF-DF','FF-F2F','FF-FS','FF-NT']#
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -264,16 +265,23 @@ class Trainer(object):
             for name, value in losses.items():
                 train_recorder_loss[name].update(value)
 
+            
             # run tensorboard to visualize the training process
-            if iteration % 300 == 0 and self.config['local_rank']==0:
+            if iteration % 100 == 0 and self.config['local_rank']==0:
                 if self.config['SWA'] and (epoch>self.config['swa_start'] or self.config['dry_run']):
                     self.scheduler.step()
                 # info for loss
                 loss_str = f"Iter: {step_cnt}    "
+
+                train_log = {}
+
                 for k, v in train_recorder_loss.items():
                     v_avg = v.average()
                     if v_avg == None:
                         loss_str += f"training-loss, {k}: not calculated"
+                        writer = self.get_writer('train', ..., k)
+                        writer.add_scalar(f'train_loss/{k}', v_avg, global_step=step_cnt)
+                        train_log[f"train_loss/{k}"] = v_avg
                         continue
                     loss_str += f"training-loss, {k}: {v_avg}    "
                     # tensorboard-1. loss
@@ -286,12 +294,16 @@ class Trainer(object):
                     v_avg = v.average()
                     if v_avg == None:
                         metric_str += f"training-metric, {k}: not calculated    "
+                        writer = self.get_writer('train', ..., k)
+                        writer.add_scalar(f'train_metric/{k}', v_avg, global_step=step_cnt)
+                        train_log[f"train_metric/{k}"] = v_avg
                         continue
                     metric_str += f"training-metric, {k}: {v_avg}    "
                     # tensorboard-2. metric
                     writer = self.get_writer('train', ','.join(self.config['train_dataset']), k)
                     writer.add_scalar(f'train_metric/{k}', v_avg, global_step=step_cnt)
                 self.logger.info(metric_str)
+                wandb.log(train_log, step=step_cnt)
 
 
 
@@ -404,19 +416,24 @@ class Trainer(object):
             self.logger.info(loss_str)
         # tqdm.write(loss_str)
         metric_str = f"dataset: {key}    step: {step}    "
+        test_log = {}
         for k, v in metric_one_dataset.items():
             if k == 'pred' or k == 'label' or k=='dataset_dict':
                 continue
+            test_log[f"test/{key}/{k}"] = v
             metric_str += f"testing-metric, {k}: {v}    "
             # tensorboard-2. metric
             writer = self.get_writer('test', key, k)
             writer.add_scalar(f'test_metrics/{k}', v, global_step=step)
+            
         if 'pred' in metric_one_dataset:
             acc_real, acc_fake = self.get_respect_acc(metric_one_dataset['pred'], metric_one_dataset['label'])
             metric_str += f'testing-metric, acc_real:{acc_real}; acc_fake:{acc_fake}'
             writer.add_scalar(f'test_metrics/acc_real', acc_real, global_step=step)
             writer.add_scalar(f'test_metrics/acc_fake', acc_fake, global_step=step)
         self.logger.info(metric_str)
+
+        wandb.log(test_log, step=step)
     def test_epoch(self, epoch, iteration, test_data_loaders, step):
         # set model to eval mode
         self.setEval()

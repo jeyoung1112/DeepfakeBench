@@ -48,8 +48,7 @@ from detectors import DETECTOR
 from networks import BACKBONE
 from loss import LOSSFUNC
 from transformers import AutoProcessor, CLIPModel, ViTModel, ViTConfig
-import loralib as lora
-import copy
+from peft import get_peft_model, LoraConfig
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +65,9 @@ class CLIPSimpleLora(AbstractDetector):
     def build_backbone(self, config):
         # prepare the backbone
         _, backbone = get_clip_visual(model_name="openai/clip-vit-large-patch14")
-        for param in backbone.parameters():
-            param.requires_grad = False
+        lora_rank = config.get('lora_rank', 16)
+        lora_alpha = config.get('lora_alpha', 16)
+        backbone = apply_lora_to_clip(backbone, r=lora_rank, lora_alpha=lora_alpha)
         return backbone
 
         
@@ -115,3 +115,15 @@ def get_clip_visual(model_name = "openai/clip-vit-large-patch14"):
     processor = AutoProcessor.from_pretrained(model_name)
     model = CLIPModel.from_pretrained(model_name)
     return processor, model.vision_model
+
+
+def apply_lora_to_clip(backbone, r=16, lora_alpha=16):
+    """Wrap the CLIP vision backbone with PEFT LoRA on Q and V projections."""
+    lora_config = LoraConfig(
+        r=r,
+        lora_alpha=lora_alpha,
+        target_modules=["q_proj", "v_proj"],
+        lora_dropout=0.0,
+        bias="none",
+    )
+    return get_peft_model(backbone, lora_config)

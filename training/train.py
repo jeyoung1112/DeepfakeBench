@@ -35,6 +35,7 @@ from dataset import *
 from metrics.utils import parse_metric_for_print
 from logger import create_logger, RankFilter
 
+import wandb
 
 parser = argparse.ArgumentParser(description='Process some paths.')
 parser.add_argument('--detector_path', type=str,
@@ -252,6 +253,13 @@ def main():
             )
     os.makedirs(logger_path, exist_ok=True)
     logger = create_logger(os.path.join(logger_path, 'training.log'))
+
+    wandb.init(
+        project="DeepfakeBench",
+        name=config['model_name'] + task_str + '_' + timenow,
+        config=config,
+    )
+
     logger.info('Save log to {}'.format(logger_path))
     config['ddp']= args.ddp
     # print configuration

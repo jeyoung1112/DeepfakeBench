@@ -21,7 +21,7 @@ test_dataset: [FaceForensics++]
 compression: c23  # compression-level for videos
 train_batchSize: 32   # training batch size
 test_batchSize: 32   # test batch size
-workers: 0   # number of data loading workers
+workers: 8   # number of data loading workers
 frame_num: {'train': 32, 'test': 32}   # number of frames to use per video in training and testing
 resolution: 224   # resolution of output image to network
 with_mask: false   # whether to include mask information in the input
@@ -84,3 +84,10 @@ metric_scoring: auc   # metric for evaluation (auc, acc, eer, ap)
 
 cuda: true   # whether to use CUDA acceleration
 cudnn: true   # whether to use CuDNN for convolution operations
+
+# lora
+# lora_rank: 8 # 4
+# lora_alpha: 8
+
+lora_rank: 16
+lora_alpha: 16
