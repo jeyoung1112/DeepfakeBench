@@ -1,10 +1,13 @@
-# log dir 
-log_dir: /data/home/zhiyuanyan/DeepfakeBench/logs_debug/clip_simple_lora
+# log dir
+log_dir: /data/home/zhiyuanyan/DeepfakeBench/logs_debug/dino_lora
 
 # model setting
 pretrained: /media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/pretrained/xception-b5690688.pth   # path to a pre-trained model, if using one
-model_name: clip_simple_lora # model name
+model_name: dino_lora  # model name
 backbone_name: vit  # backbone name
+
+# dino model
+dino_model_name: facebook/dinov2-large
 
 #backbone setting
 backbone_config:
@@ -81,12 +84,11 @@ losstype: null
 metric_scoring: auc   # metric for evaluation (auc, acc, eer, ap)
 
 # cuda
-
 cuda: true   # whether to use CUDA acceleration
 cudnn: true   # whether to use CuDNN for convolution operations
 
 # lora
-# lora_rank: 8 # 4
+# lora_rank: 8
 # lora_alpha: 8
 
 lora_rank: 16

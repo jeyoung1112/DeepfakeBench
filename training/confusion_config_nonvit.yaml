@@ -1,0 +1,31 @@
+model_name:
+  - xception
+  - srm
+  - recce
+  - efficientnetb4
+
+
+detector_path:
+  - ./training/config/detector/xception.yaml
+  - ./training/config/detector/srm.yaml
+  - ./training/config/detector/recce.yaml
+  - ./training/config/detector/efficientnetb4.yaml
+
+
+test_dataset:
+  - "FaceForensics++"
+  - "DFDCP"
+  - "Celeb-DF-v2"
+  - "DFDC"
+  - "DeepFakeDetection"
+
+weights_path:
+  - /home/jeyoung/DeepfakeBench/logs/training/xception_2026-03-24-08-01-39/test/FaceForensics++/xception_ckpt_best.pth
+  - /home/jeyoung/DeepfakeBench/logs/training/srm_2026-03-25-01-43-47/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/DeepfakeBench/logs/training/recce_2026-03-25-01-43-35/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/DeepfakeBench/logs/training/efficientnetb4_2026-03-24-11-10-51/test/FaceForensics++/ckpt_best.pth 
+
+
+gpu:
+  - 5
+  # - 1

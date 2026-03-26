@@ -46,3 +46,6 @@ from .tall_detector import TALLDetector
 from .effort_detector import EffortDetector
 from .clip_probing import CLIPProbing
 from .clip_simple_lora import CLIPSimpleLora
+from .dino_probing import DINOProbing
+from .dino_lora import DINOLora
+from .gend_detector import GenDDetector

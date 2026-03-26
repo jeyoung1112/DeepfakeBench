@@ -1,0 +1,31 @@
+model_name:
+  # - clip_probing
+  # - clip_simple_lora
+  # - dino_probing
+  - dino_lora
+
+
+detector_path:
+  # - ./training/config/detector/clip_probing.yaml
+  # - ./training/config/detector/clip_simple_lora.yaml
+  # - ./training/config/detector/dino_probing.yaml
+  - ./training/config/detector/dino_lora.yaml
+
+
+test_dataset:
+  - "FaceForensics++"
+  - "DFDCP"
+  - "Celeb-DF-v2"
+  # - "DFDC"
+  # - "DeepFakeDetection"
+
+weights_path:
+  # - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/clip_probing_avg_ckpt_best.pth   
+  # - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/clip_lora_ckpt_best.pth   
+  # - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/dino_probing_ckpt_best.pth
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/dino_lora_ckpt_best.pth   
+
+
+gpu:
+  - 6
+  # - 1
