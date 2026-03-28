@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, roc_auc_score
 
 from dataset.abstract_dataset import DeepfakeAbstractBaseDataset
 from detectors import DETECTOR
@@ -123,12 +123,24 @@ def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold
     plt.close()
     print(f"  Plot saved → {save_path}")
 
+    fpr_curve, tpr_curve, _ = roc_curve(y_true, y_pred.squeeze())
+    sklearn_auc = roc_auc_score(y_true, y_pred.squeeze())
+    fnr_curve = 1.0 - tpr_curve
+    eer_idx = np.nanargmin(np.abs(fpr_curve - fnr_curve))
+    eer = (fpr_curve[eer_idx] + fnr_curve[eer_idx]) / 2.0
+    tpr_at_fpr1 = tpr_curve[np.searchsorted(fpr_curve, 0.01, side='right') - 1]
+    tpr_at_fpr5 = tpr_curve[np.searchsorted(fpr_curve, 0.05, side='right') - 1]
+
     metrics = {
     "dataset": dataset_name,
     "threshold": threshold,
     "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
     "accuracy": accuracy, "precision": precision,
     "recall": recall, "f1": f1, "specificity": specificity,
+    "sklearn_auc": float(sklearn_auc),
+    "eer": float(eer),
+    "tpr_at_fpr1pct": float(tpr_at_fpr1),
+    "tpr_at_fpr5pct": float(tpr_at_fpr5)
     }
     json_path = os.path.join(output_dir, f"{args.model_name}_{args.test_dataset[0]}_cm_{safe_name}.json")
     with open(json_path, 'w') as f:
