@@ -20,10 +20,10 @@ test_dataset:
   - "DeepFakeDetection"
 
 weights_path:
-  - /home/jeyoung/DeepfakeBench/logs/training/xception_2026-03-24-08-01-39/test/FaceForensics++/xception_ckpt_best.pth
-  - /home/jeyoung/DeepfakeBench/logs/training/srm_2026-03-25-01-43-47/test/FaceForensics++/ckpt_best.pth
-  - /home/jeyoung/DeepfakeBench/logs/training/recce_2026-03-25-01-43-35/test/FaceForensics++/ckpt_best.pth
-  - /home/jeyoung/DeepfakeBench/logs/training/efficientnetb4_2026-03-24-11-10-51/test/FaceForensics++/ckpt_best.pth 
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/xception_ckpt_best.pth
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/srm_ckpt_best.pth
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/recce_ckpt_best.pth
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/efficientnet_ckpt_best.pth
 
 
 gpu:
