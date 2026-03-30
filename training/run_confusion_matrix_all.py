@@ -2,15 +2,19 @@
 Iterate over confusion_config.yaml and run test_confusion_matrix.py for each model.
 Runs models sequentially, pinning each to a specific GPU.
 """
+import argparse
 import os
 import subprocess
 import sys
 import yaml
 
 
-CONFIG_PATH = './training/confusion_config_nonvit.yaml'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--config', default='./training/confusion_config_nonvit.yaml',
+                    help='Path to confusion config YAML (default: %(default)s)')
+args = parser.parse_args()
 
-with open(CONFIG_PATH, 'r') as f:
+with open(args.config, 'r') as f:
     cfg = yaml.safe_load(f)
 
 model_names    = cfg.get('model_name', [])

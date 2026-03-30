@@ -27,5 +27,5 @@ weights_path:
 
 
 gpu:
-  - 5
+  - 0
   # - 1
