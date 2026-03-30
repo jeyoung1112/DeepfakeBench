@@ -35,6 +35,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from sklearn import metrics
 
 sys.path.append('.')
 
@@ -67,7 +68,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 JPEG_QUALITIES = [10, 20, 30, 50, 70, 90]   # lower = more compression
 BLUR_SIGMAS    = [0.5, 1.0, 2.0, 3.0, 5.0]
-SHARPEN_AMOUNTS = [0.5, 1.0, 2.0, 3.0, 5.0]
+BRIGHTNESS = [0.5, 0.75, 1.0, 1.25, 1.5]
 
 
 def apply_jpeg(img_np: np.ndarray, quality: int) -> np.ndarray:
@@ -87,37 +88,44 @@ def apply_blur(img_np: np.ndarray, sigma: float) -> np.ndarray:
     return cv2.GaussianBlur(img_np, (k, k), sigma)
 
 
-def apply_sharpen(img_np: np.ndarray, amount: float) -> np.ndarray:
-    """Unsharp masking: sharpened = img + amount * (img - blurred(img, sigma=3))."""
-    blurred = cv2.GaussianBlur(img_np, (0, 0), 3)
-    sharpened = cv2.addWeighted(img_np, 1.0 + amount, blurred, -amount, 0)
-    return np.clip(sharpened, 0, 255).astype(np.uint8)
+# def apply_sharpen(img_np: np.ndarray, amount: float) -> np.ndarray:
+#     """Unsharp masking: sharpened = img + amount * (img - blurred(img, sigma=3))."""
+#     blurred = cv2.GaussianBlur(img_np, (0, 0), 3)
+#     sharpened = cv2.addWeighted(img_np, 1.0 + amount, blurred, -amount, 0)
+#     return np.clip(sharpened, 0, 255).astype(np.uint8)
 
+
+def apply_brightness(img_np: np.ndarray, amount: float) -> np.ndarray:
+    """Unsharp masking: sharpened = img + amount * (img - blurred(img, sigma=3))."""
+    return cv2.convertScaleAbs(img_np, alpha=amount, beta=0)
 
 # ---------------------------------------------------------------------------
 # Dataset wrapper
 # ---------------------------------------------------------------------------
 
-class RealOnlyDegradedDataset(DeepfakeAbstractBaseDataset):
+class DegradedDataset(DeepfakeAbstractBaseDataset):
     """
-    Wraps DeepfakeAbstractBaseDataset keeping only real (label==0) images.
+    Wraps DeepfakeAbstractBaseDataset.
     Applies an optional degradation function between image load and normalise.
+    Can optionally filter to keep only real images (label==0), or keep all.
     """
 
-    def __init__(self, config: dict, degradation_fn=None):
+    def __init__(self, config: dict, degradation_fn=None, keep_only_reals=False):
         super().__init__(config=config, mode='test')
 
-        # Keep only real images
-        real_idx = [i for i, lbl in enumerate(self.label_list) if lbl == 0]
-        self.image_list = [self.image_list[i] for i in real_idx]
-        self.label_list = [0] * len(self.image_list)
+        # If requested, filter to keep only real images; otherwise, keep all (0 and 1)
+        if keep_only_reals:
+            real_idx = [i for i, lbl in enumerate(self.label_list) if lbl == 0]
+            self.image_list = [self.image_list[i] for i in real_idx]
+            self.label_list = [0] * len(self.image_list)
+        
+        # Now binds whatever image_list and label_list are currently set to
         self.data_dict  = {'image': self.image_list, 'label': self.label_list}
-
         self.degradation_fn = degradation_fn
 
     def __getitem__(self, index):
         image_path = self.data_dict['image'][index]
-        label      = self.data_dict['label'][index]   # always 0
+        label      = self.data_dict['label'][index]   # Now this will be 0 or 1
 
         # Handle video-level (clip) entries – just use the first frame
         if isinstance(image_path, list):
@@ -151,7 +159,7 @@ class RealOnlyDegradedDataset(DeepfakeAbstractBaseDataset):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def run_inference(model, dataset, batch_size: int, num_workers: int = 4) -> np.ndarray:
+def run_inference(model, dataset, batch_size: int, num_workers: int = 4):
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
@@ -161,19 +169,77 @@ def run_inference(model, dataset, batch_size: int, num_workers: int = 4) -> np.n
         drop_last=False,
     )
     all_probs = []
+    all_labels = [] # Track labels here
+    
     for data_dict in tqdm(loader, leave=False, desc='  infer'):
         imgs   = data_dict['image'].to(device)
-        labels = torch.zeros(imgs.size(0), dtype=torch.long, device=device)
+        # Assuming data_dict['label'] contains your ground truths 
+        labels = data_dict['label'].to(device) 
+        
         d = {'image': imgs, 'label': labels, 'mask': None, 'landmark': None}
         out = model(d, inference=True)
+        
         all_probs.extend(out['prob'].cpu().numpy().tolist())
-    return np.array(all_probs, dtype=np.float32)
+        all_labels.extend(labels.cpu().numpy().tolist())
+        
+    return np.array(all_labels, dtype=np.int64), np.array(all_probs, dtype=np.float32)
 
 
-def compute_fpr(probs: np.ndarray, threshold: float) -> float:
-    """All items are real; FPR = fraction predicted as fake."""
-    return float((probs.squeeze() > threshold).mean())
+def compute_fpr(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5) -> float:
+    """FPR = FP / (FP + TN). Fraction of real images incorrectly predicted as fake."""
+    preds = (probs.squeeze() > threshold).astype(int)
+    reals = (labels.squeeze() == 0)
+    if not np.any(reals): 
+        return 0.0
+    fp = np.sum((preds == 1) & reals)
+    return float(fp / np.sum(reals))
 
+def compute_fnr(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5) -> float:
+    """FNR = FN / (FN + TP). Fraction of fake images incorrectly predicted as real."""
+    preds = (probs.squeeze() > threshold).astype(int)
+    fakes = (labels.squeeze() == 1)
+    if not np.any(fakes): 
+        return 0.0
+    fn = np.sum((preds == 0) & fakes)
+    return float(fn / np.sum(fakes))
+
+def compute_tpr_at_fpr(labels: np.ndarray, probs: np.ndarray, percentage: float = 1.0) -> float:
+    """TPR at a fixed FPR (e.g., percentage=1.0 means 1% FPR)."""
+    # Convert percentage to a 0-1 scale if passed as a whole number (e.g., 1 -> 0.01)
+    target_fpr = percentage / 100.0 if percentage >= 1.0 else percentage
+    fpr, tpr, _ = metrics.roc_curve(labels.squeeze(), probs.squeeze())
+    # Interpolate to find the exact TPR at the target FPR
+    return float(np.interp(target_fpr, fpr, tpr))
+
+def compute_fpr_at_tpr(labels: np.ndarray, probs: np.ndarray, percentage: float = 95.0) -> float:
+    """FPR at a fixed TPR (e.g., percentage=95.0 means 95% TPR)."""
+    # Convert percentage to a 0-1 scale if passed as a whole number (e.g., 95 -> 0.95)
+    target_tpr = percentage / 100.0 if percentage > 1.0 else percentage
+    fpr, tpr, _ = metrics.roc_curve(labels.squeeze(), probs.squeeze())
+    # Interpolate to find the exact FPR at the target TPR
+    return float(np.interp(target_tpr, tpr, fpr))
+
+def compute_acc(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5) -> float:
+    """Overall classification accuracy at the given threshold."""
+    preds = (probs.squeeze() > threshold).astype(int)
+    return float(np.mean(preds == labels.squeeze()))
+
+def compute_auc(labels: np.ndarray, probs: np.ndarray) -> float:
+    """Area Under the Receiver Operating Characteristic Curve."""
+    try:
+        return float(metrics.roc_auc_score(labels.squeeze(), probs.squeeze()))
+    except ValueError:
+        # Failsafe: roc_auc_score throws an error if only one class is present in the batch
+        return float('nan')
+
+def compute_eer(labels: np.ndarray, probs: np.ndarray) -> float:
+    """Equal Error Rate: The point where False Positive Rate equals False Negative Rate."""
+    fpr, tpr, _ = metrics.roc_curve(labels.squeeze(), probs.squeeze())
+    fnr = 1 - tpr
+    # Find the threshold index where the absolute difference between FPR and FNR is smallest
+    idx = np.nanargmin(np.abs(fpr - fnr))
+    # EER is effectively the average of FPR and FNR at this intersection
+    return float((fpr[idx] + fnr[idx]) / 2.0)
 
 # ---------------------------------------------------------------------------
 # Plotting
@@ -181,31 +247,48 @@ def compute_fpr(probs: np.ndarray, threshold: float) -> float:
 
 def plot_results(all_results: dict, output_dir: str, model_name: str):
     deg_meta = {
-        'jpeg':    (JPEG_QUALITIES,    'JPEG Quality',       'lower = more compressed'),
-        'blur':    (BLUR_SIGMAS,       'Gaussian Blur σ',    ''),
-        'sharpen': (SHARPEN_AMOUNTS,   'Sharpen Amount',     ''),
+        'jpeg':       (JPEG_QUALITIES,    'JPEG Quality',       'lower = more compressed'),
+        'blur':       (BLUR_SIGMAS,       'Gaussian Blur σ',    ''),
+        'brightness': (BRIGHTNESS,        'Brightness Scale',   '< 1.0 dark, > 1.0 bright'),
+        # 'sharpen':  (SHARPEN_AMOUNTS,   'Sharpen Amount',     ''),
     }
 
-    for deg_type, (levels, xlabel, note) in deg_meta.items():
-        fig, ax = plt.subplots(figsize=(7, 4))
-        for dataset_name, results in all_results.items():
-            if deg_type not in results:
-                continue
-            fprs = [results[deg_type].get(k, float('nan'))
-                    for k in results[deg_type]]
-            x    = levels[:len(fprs)]
-            ax.plot(x, fprs, marker='o', label=dataset_name)
+    # We can plot multiple metrics now! Let's plot AUC and FPR.
+    metrics_to_plot = ['fpr', 'auc', 'eer'] 
 
-        ax.set_xlabel(f'{xlabel}' + (f'  ({note})' if note else ''))
-        ax.set_ylabel('FPR')
-        ax.set_ylim(0, 1)
-        ax.set_title(f'{model_name} — FPR vs {xlabel}')
-        ax.legend(fontsize=8)
-        plt.tight_layout()
-        save_path = os.path.join(output_dir, f'{model_name}_fpr_{deg_type}.png')
-        plt.savefig(save_path, dpi=150)
-        plt.close()
-        print(f'  plot  → {save_path}')
+    for metric in metrics_to_plot:
+        for deg_type, (levels, xlabel, note) in deg_meta.items():
+            fig, ax = plt.subplots(figsize=(7, 4))
+            
+            for dataset_name, results in all_results.items():
+                if deg_type not in results:
+                    continue
+                
+                # Extract the specific metric from our new nested dictionary structure
+                # e.g., results['jpeg']['Q10']['fpr']
+                y_values = [results[deg_type][k].get(metric, float('nan')) 
+                            for k in results[deg_type]]
+                
+                x = levels[:len(y_values)]
+                ax.plot(x, y_values, marker='o', label=dataset_name)
+
+            ax.set_xlabel(f'{xlabel}' + (f'  ({note})' if note else ''))
+            ax.set_ylabel(metric.upper())
+            
+            # AUC usually ranges 0.5 to 1.0, FPR/EER ranges 0.0 to 1.0
+            if metric in ['fpr', 'eer', 'fnr']:
+                ax.set_ylim(-0.05, 1.05)
+            else:
+                ax.set_ylim(0.45, 1.05)
+                
+            ax.set_title(f'{model_name} — {metric.upper()} vs {xlabel}')
+            ax.legend(fontsize=8)
+            plt.tight_layout()
+            
+            save_path = os.path.join(output_dir, f'{model_name}_{metric}_{deg_type}.png')
+            plt.savefig(save_path, dpi=150)
+            plt.close()
+            print(f'  plot  → {save_path}')
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +338,8 @@ def main():
         ('clean',   [(None, None)]),
         ('jpeg',    [(f'Q{q}',      lambda img, q=q: apply_jpeg(img, q))   for q in JPEG_QUALITIES]),
         ('blur',    [(f's{s}',      lambda img, s=s: apply_blur(img, s))   for s in BLUR_SIGMAS]),
-        ('sharpen', [(f'a{a:.1f}',  lambda img, a=a: apply_sharpen(img, a)) for a in SHARPEN_AMOUNTS]),
+        ('brightness',    [(f'b{b:.1f}',  lambda img, b=b: apply_brightness(img, b)) for b in BRIGHTNESS]),
+        # ('sharpen', [(f'a{a:.1f}',  lambda img, a=a: apply_sharpen(img, a)) for a in SHARPEN_AMOUNTS]),
     ]
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -274,20 +358,45 @@ def main():
             all_results[dataset_name][deg_type] = {}
 
             for level_key, fn in levels:
-                ds = RealOnlyDegradedDataset(cfg, degradation_fn=fn)
-                n_real = len(ds)
-                if n_real == 0:
-                    print(f'  [{deg_type:8s}] {str(level_key):8s}  — no real images, skipped')
+                # Assuming you updated your dataset class to keep both real and fake images
+                ds = DegradedDataset(cfg, degradation_fn=fn, keep_only_reals=False)
+                n_total = len(ds)
+                
+                if n_total == 0:
+                    print(f'  [{deg_type:8s}] {str(level_key):8s}  — no images, skipped')
                     continue
 
-                probs = run_inference(model, ds,
-                                      batch_size=args.batch_size,
-                                      num_workers=num_workers)
-                fpr = compute_fpr(probs, args.threshold)
+                # Run inference (make sure your run_inference returns labels AND probs)
+                labels, probs = run_inference(model, ds,
+                                              batch_size=args.batch_size,
+                                              num_workers=num_workers)
+                
+                # Compute all metrics
+                fpr = compute_fpr(labels, probs, args.threshold)
+                fnr = compute_fnr(labels, probs, args.threshold)
+                auc = compute_auc(labels, probs)
+                eer = compute_eer(labels, probs)
+                acc = compute_acc(labels, probs, args.threshold)
+                tpr_at_fpr_1 = compute_tpr_at_fpr(labels, probs, percentage=1.0)
+                fpr_at_tpr_95 = compute_fpr_at_tpr(labels, probs, percentage=99.0)
+
                 key = level_key if level_key is not None else 'clean'
-                all_results[dataset_name][deg_type][key] = fpr
+                
+                # Store everything as a dictionary for this specific degradation level
+                all_results[dataset_name][deg_type][key] = {
+                    "fpr": fpr,
+                    "fnr": fnr,
+                    "auc": auc,
+                    "eer": eer,
+                    "acc": acc,
+                    "tpr_at_fpr_1": tpr_at_fpr_1,
+                    "fpr_at_tpr_99": fpr_at_tpr_95,
+                    "n_total": n_total
+                }
+                
+                # Print a clean summary to the console
                 print(f'  [{deg_type:8s}] {str(key):8s}  '
-                      f'FPR={fpr:.4f}  n_real={n_real}')
+                      f'AUC={auc:.4f}  EER={eer:.4f}  FPR={fpr:.4f}  TPR@1%FPR={tpr_at_fpr_1:.4f}')
 
     # Save JSON
     json_path = os.path.join(args.output_dir,
