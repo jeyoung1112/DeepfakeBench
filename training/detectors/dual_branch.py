@@ -6,16 +6,16 @@ import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 from metrics.base_metrics_class import calculate_metrics_for_train
 
+from networks.pixel_branch import PixelBranch
+from networks.frequency_branch import FrequencyBranch
+
 from .base_detector import AbstractDetector
 from detectors import DETECTOR
 from loss import LOSSFUNC
 
-
 logger = logging.getLogger(__name__)
 
-
 class Expander(nn.Module):
-
     def __init__(self, in_dim, embed_dim=4096):
         super().__init()
         self.exp = nn.Sequential([
@@ -33,6 +33,179 @@ class Expander(nn.Module):
 
 @DETECTOR.register_module(module_name='dual_branch')
 class DualBranchDetector(AbstractDetector)
-
     def __init__(self, config):
+        self.config = config
+        self.mode = config.get('mode', 'dual')
+        self.backbone = self.build_backbone(config)
+        self.head = nn.Linear(1024, 2) # vit-l
+        self.loss_func = self.build_loss(config)
+
+        self.pixel_branch, self.freq_branch = self.build_backbone(config)
+        self.loss_func, self.vicreg_loss = self.build_loss(config)
+
+        self.exp_pixel = None
+        self.exp_freq = None
+        if self.mode == 'dual':
+            self.exp_pixel = Expander(pixel_dim, embed_dim)
+            self.exp_freq = Expander(freq_dim, embed_dim)
         
+        pixel_dim = self.pixel_branch.out_dim if self.pixel_branch else 0
+        freq_dim = self.freq_branch.out_dim if self.freq_branch else 0
+        embed_dim = config.get('embed_dim', 4096)
+        
+        head_input_dim = pixel_dim + freq_dim
+        head_hidden = config.get('head_hidden_dim', 256)
+        head_dropout = config.get('head_dropout', 0.3)
+        num_classes = config.get('backbone_config', {}).get('num_classes', 2)
+
+        self.head = nn.Sequential(
+            nn.Linear(head_input_dim, head_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(head_dropout),
+            nn.Linear(head_hidden, num_classes),
+        )
+ 
+        # VICReg weight
+        self.vicreg_weight = config.get('vicreg_weight', 0.1)
+ 
+        # Metric accumulators (DeepfakeBench convention)
+        self.prob, self.label = [], []
+        self.correct, self.total = 0, 0
+
+        self._log_params()
+    
+    def _log_params(self):
+        """Log parameter counts for all components."""
+        total, trainable = 0, 0
+        components = {
+            'pixel_branch': self.pixel_branch,
+            'freq_branch': self.freq_branch,
+            'exp_pixel': self.exp_pixel,
+            'exp_freq': self.exp_freq,
+            'head': self.head,
+        }
+
+        for name, module in components.items():
+            if module is not None:
+                t = sum(p.numel() for p in module.parameters())
+                tr = sum(p.numel() for p in module.parameters() if p.requires_grad)
+                total += t
+                trainable += tr
+                logger.info(f"  {name}: {tr:,} trainable / {t:,} total")
+ 
+        logger.info(f"DualBranch [{self.mode}]: {trainable:,} trainable / {total:,} total")
+
+    def classifier(self, feat_dict):
+        parts = []
+
+        if feat_dict['y_pixel'] is not None:
+            parts.append(feat_dict['y_pixel'])
+
+        if feat_dict['y_freq'] is not None:
+            parts.append(feat_dict['y_freq'])
+ 
+        fused = torch.cat(parts, dim=-1)
+        return self.head(fused)
+
+    def build_backbone(self, config):
+        pixel_branch = None
+        freq_branch = None
+
+        mode = config.get("mode", "dual")
+
+        if mode in ('dual', 'pixel_only'):
+            pixel_branch = PixelBranch(config)
+ 
+        if mode in ('dual', 'freq_only'):
+            freq_branch = FrequencyBranch(config)
+ 
+        return pixel_branch, freq_branch
+
+    def build_loss(self, config):
+        cls_loss_class = LOSSFUNC[config.get('loss_func', 'cross_entropy')]
+        cls_loss = cls_loss_class()
+ 
+        # VICReg loss (dual mode only)
+        vicreg_loss = None
+        if config.get('mode', 'dual') == 'dual':
+            vicreg_loss = LOSSFUNC['vicreg'](
+                lambda_inv=config.get('lambda_inv', 25.0),
+                mu_var=config.get('mu_var', 25.0),
+                nu_cov=config.get('nu_cov', 1.0),
+            )
+ 
+        return cls_loss, vicreg_loss
+
+    def get_train_metrics(self, data_dict: dict, pred_dict: dict) -> dict:
+        label = data_dict['label']
+        pred = pred_dict['cls']
+        # compute metrics for batch data
+        auc, eer, acc, ap = calculate_metrics_for_train(label.detach(), pred.detach())
+        metric_batch_dict = {'acc': acc, 'auc': auc, 'eer': eer, 'ap': ap}
+        return metric_batch_dict
+    
+    def get_test_metrics(self):
+        """
+        Compute test metrics from accumulated predictions.
+        Called at the end of test epoch.
+        """
+        # Concatenate accumulated predictions
+        y_pred = np.concatenate(self.prob)
+        y_true = np.concatenate(self.label)
+ 
+        # Compute AUC
+        try:
+            auc = roc_auc_score(y_true, y_pred)
+        except ValueError:
+            auc = 0.5
+ 
+        # Compute accuracy at 0.5 threshold
+        acc = ((y_pred >= 0.5) == y_true).mean()
+ 
+        # TPR @ FPR thresholds
+        from sklearn.metrics import roc_curve
+        fpr, tpr, _ = roc_curve(y_true, y_pred)
+ 
+        tpr_at_fpr1 = float(tpr[max(0, (fpr <= 0.01).sum() - 1)])
+        tpr_at_fpr5 = float(tpr[max(0, (fpr <= 0.05).sum() - 1)])
+ 
+        # EER
+        fnr = 1 - tpr
+        eer_idx = np.nanargmin(np.abs(fpr - fnr))
+        eer = float(fpr[eer_idx])
+ 
+        metric_dict = {
+            'auc': auc,
+            'acc': acc,
+            'eer': eer,
+            'tpr@fpr1%': tpr_at_fpr1,
+            'tpr@fpr5%': tpr_at_fpr5,
+        }
+ 
+        # Reset accumulators
+        self.prob, self.label = [], []
+        self.correct, self.total = 0, 0
+ 
+        return metric_dict
+
+    def forward(self, data_dict, inference=False):
+
+        feat_dict = self.features(data_dict)
+ 
+        pred = self.classifier(feat_dict)
+ 
+        prob = torch.softmax(pred, dim=1)[:, 1]
+ 
+        pred_dict = {
+            'cls': pred,
+            'prob': prob,
+            'feat': feat_dict,
+        }
+ 
+        if inference:
+            self.prob.append(prob.detach().cpu().numpy())
+            self.label.append(
+                data_dict['label'].detach().cpu().numpy()
+            )
+ 
+        return pred_dict

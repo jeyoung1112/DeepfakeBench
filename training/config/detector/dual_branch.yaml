@@ -1,0 +1,69 @@
+# Detector
+model_name: 'dual_branch'
+
+# Mode: "dual" | "pixel_only" | "freq_only"
+mode: 'dual'
+
+# Pixel Branch (CLIP + LoRA)
+clip_model_name: 'openai/clip-vit-large-patch14'
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.1
+lora_targets: ['q_proj', 'v_proj']
+
+# Frequency Branch (DCT + CNN)
+freq_backbone: 'resnet18'   # "resnet18" or "xception"
+freq_out_dim: 512
+dct_log_scale: true
+
+# VICReg alignment
+embed_dim: 4096             # expander size
+vicreg_weight: 0.1          # L_total = L_cls + lambda_vic * L_vicreg
+lambda_inv: 25.0            # invariance weight
+mu_var: 25.0                # variance weight
+nu_cov: 1.0                 # covariance weight
+
+# Classification Head
+head_hidden_dim: 256
+head_dropout: 0.3
+
+# Backbone config
+backbone_name: 'dual_branch'
+backbone_config:
+  num_classes: 2
+  inc: 3
+  dropout: false
+
+# Loss
+loss_func: 'cross_entropy'
+
+# Training
+optimizer:
+  type: 'adam'
+  adam:
+    lr: 0.0001
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 0.00000001
+
+lr_scheduler: null
+
+nEpochs: 10
+batchSize: 32
+resolution: 224
+frame_num:
+  train: 32
+  test: 32
+
+# Dataset 
+train_dataset: ['FaceForensics++']
+test_dataset: ['FaceForensics++']
+compression: 'c23'
+train_batchSize: 32
+test_batchSize: 32
+workers: 8
+
+# Logging & checkpoints
+log_dir: './logs/dual_branch'
+save_ckpt: true
+save_feat: false

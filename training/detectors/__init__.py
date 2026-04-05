@@ -49,3 +49,4 @@ from .clip_simple_lora import CLIPSimpleLora
 from .dino_probing import DINOProbing
 from .dino_lora import DINOLora
 from .gend_detector import GenDDetector
+from .dual_branch_detector import DualBranchDetector
