@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from loss import LOSSFUNC
 
 @LOSSFUNC.register_module(module_name='vicreg')
-class VicRegLoss(nn.Module):
+class VICRegLoss(nn.Module):
     def __init__(self, 
                 lambda_inv=25.0,
                 mu_var=25.0,
@@ -29,7 +29,7 @@ class VicRegLoss(nn.Module):
     def covariance(self, z):
         n, d = z.shape
         z_centered = z - z.mean(dim=0)
-        cov = (z.centered.T @ z_centered) / (n - 1)
+        cov = (z_centered.T @ z_centered) / (n - 1)
         cov.fill_diagonal_(0)
         return (cov.pow(2)).sum() / d
 
@@ -47,9 +47,9 @@ class VicRegLoss(nn.Module):
             'vicreg_inv': inv_loss.item(),
             'vicreg_var': var_loss.item(),
             'vicreg_cov': cov_loss.item(),
-            'vicreg_total': loss.item(),
+            'vicreg_total': total_loss.item(),
             'std_z1_min': z1.std(dim=0).min().item(),
             'std_z2_min': z2.std(dim=0).min().item(),
         }
  
-        return loss, loss_dict
+        return total_loss, loss_dict

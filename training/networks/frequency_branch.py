@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from torchvision.models import resnet18, ResNet18_Weights
 from networks import BACKBONE
 
+logger = logging.getLogger(__name__)
+
 class DCTTransform(nn.Module):
  
     def __init__(self, size=224, log_scale=True):
@@ -41,7 +43,7 @@ class FrequencyBranch(nn.Module):
         img_size = config.get('resolution', 224)
         log_scale = config.get('dct_log_scale', True)
 
-        self.encoder = build_backbone(config)
+        self.encoder = self.build_backbone(config)
 
         self.out_dim = out_dim
         self.dct = DCTTransform(size=img_size, log_scale=log_scale)
@@ -51,18 +53,18 @@ class FrequencyBranch(nn.Module):
         logger.info(f"FrequencyBranch ({backbone_name}): {trainable:,} params")
 
     def build_backbone(self, config):
-        # prepare the backbone
-        backbone_class = BACKBONE[config['backbone_name']]
-        model_config = config['backbone_config']
+        backbone_class = BACKBONE[config['freq_backbone_name']]
+        model_config = config['freq_backbone_config']
         backbone = backbone_class(model_config)
-        # if donot load the pretrained weights, fail to get good results
-        state_dict = torch.load(config['pretrained'])
-        for name, weights in state_dict.items():
-            if 'pointwise' in name:
-                state_dict[name] = weights.unsqueeze(-1).unsqueeze(-1)
-        state_dict = {k:v for k, v in state_dict.items() if 'fc' not in k}
-        backbone.load_state_dict(state_dict, False)
-        logger.info('Load pretrained model successfully!')
+        pretrained = config.get('pretrained')
+        if pretrained:
+            state_dict = torch.load(pretrained)
+            for name, weights in state_dict.items():
+                if 'pointwise' in name:
+                    state_dict[name] = weights.unsqueeze(-1).unsqueeze(-1)
+            state_dict = {k: v for k, v in state_dict.items() if 'fc' not in k}
+            backbone.load_state_dict(state_dict, strict=False)
+            logger.info('Load pretrained model successfully!')
         return backbone
 
     def forward(self, x):
@@ -130,17 +132,20 @@ class FrequencyBranch(nn.Module):
 #         return self.fc(x)
  
  
-# class ResNetBackbone(nn.Module):
-#     """ResNet-18 adapted for frequency maps. ~11.4M params."""
- 
-#     def __init__(self, in_channels=3, out_dim=512):
-#         super().__init__()
-#         backbone = resnet18(weights=None)  # no pretrained for DCT input
-#         if in_channels != 3:
-#             backbone.conv1 = nn.Conv2d(in_channels, 64, 7, 2, 3, bias=False)
-#         backbone.fc = nn.Linear(backbone.fc.in_features, out_dim)
-#         self.backbone = backbone
-#         self.last_channel = out_dim
- 
-#     def forward(self, x):
-#         return self.backbone(x)
+@BACKBONE.register_module(module_name="resnet18_freq")
+class ResNetBackbone(nn.Module):
+    """ResNet-18 adapted for frequency maps. ~11.4M params."""
+
+    def __init__(self, config):
+        super().__init__()
+        in_channels = config.get('inc', 3)
+        out_dim = config.get('num_classes', 512)
+        backbone = resnet18(weights=None)  # no pretrained for DCT input
+        if in_channels != 3:
+            backbone.conv1 = nn.Conv2d(in_channels, 64, 7, 2, 3, bias=False)
+        backbone.fc = nn.Linear(backbone.fc.in_features, out_dim)
+        self.backbone = backbone
+        self.last_channel = out_dim
+
+    def forward(self, x):
+        return self.backbone(x)

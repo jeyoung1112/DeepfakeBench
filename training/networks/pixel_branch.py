@@ -15,7 +15,7 @@ class PixelBranch(nn.Module):
     }
 
     def __init__(self, config):
-        super().__init()
+        super().__init__()
 
         model_name = config.get("clip_model_name", "openai/clip-vit-large-patch14")
         lora_rank = config.get('lora_rank', 8)
@@ -48,7 +48,7 @@ class PixelBranch(nn.Module):
         logger.info(f"PixelBranch: {trainable:,} trainable / {total:,} total params")
 
     def forward(self, x):
-         outputs = self.encoder(pixel_values=x)
-        y_pixel = outputs.pooler_output  # [B, out_dim]
+        outputs = self.encoder(pixel_values=x)
+        y_pixel = outputs.pooler_output  #[B, out_dim]
         y_pixel = self.norm(y_pixel)
         return y_pixel

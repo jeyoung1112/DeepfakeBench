@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 class Expander(nn.Module):
     def __init__(self, in_dim, embed_dim=4096):
-        super().__init()
-        self.exp = nn.Sequential([
+        super().__init__()
+        self.exp = nn.Sequential(
             nn.Linear(in_dim, embed_dim),
             nn.BatchNorm1d(embed_dim),
             nn.ReLU(inplace=True),
@@ -26,32 +26,30 @@ class Expander(nn.Module):
             nn.BatchNorm1d(embed_dim),
             nn.ReLU(inplace=True),
             nn.Linear(embed_dim, embed_dim)
-        ])
+        )
 
     def forward(self, x):
         return self.exp(x)
 
 @DETECTOR.register_module(module_name='dual_branch')
-class DualBranchDetector(AbstractDetector)
+class DualBranchDetector(AbstractDetector):
     def __init__(self, config):
+        super().__init__(config)
         self.config = config
         self.mode = config.get('mode', 'dual')
-        self.backbone = self.build_backbone(config)
-        self.head = nn.Linear(1024, 2) # vit-l
-        self.loss_func = self.build_loss(config)
 
         self.pixel_branch, self.freq_branch = self.build_backbone(config)
         self.loss_func, self.vicreg_loss = self.build_loss(config)
+
+        pixel_dim = self.pixel_branch.out_dim if self.pixel_branch else 0
+        freq_dim = self.freq_branch.out_dim if self.freq_branch else 0
+        embed_dim = config.get('embed_dim', 4096)
 
         self.exp_pixel = None
         self.exp_freq = None
         if self.mode == 'dual':
             self.exp_pixel = Expander(pixel_dim, embed_dim)
             self.exp_freq = Expander(freq_dim, embed_dim)
-        
-        pixel_dim = self.pixel_branch.out_dim if self.pixel_branch else 0
-        freq_dim = self.freq_branch.out_dim if self.freq_branch else 0
-        embed_dim = config.get('embed_dim', 4096)
         
         head_input_dim = pixel_dim + freq_dim
         head_hidden = config.get('head_hidden_dim', 256)
@@ -187,6 +185,29 @@ class DualBranchDetector(AbstractDetector)
         self.correct, self.total = 0, 0
  
         return metric_dict
+
+    def features(self, data_dict: dict) -> dict:
+        img = data_dict['image']
+        feat_dict = {'y_pixel': None, 'y_freq': None}
+        if self.pixel_branch is not None:
+            feat_dict['y_pixel'] = self.pixel_branch(img)
+        if self.freq_branch is not None:
+            feat_dict['y_freq'] = self.freq_branch(img)
+        return feat_dict
+
+    def get_losses(self, data_dict: dict, pred_dict: dict) -> dict:
+        label = data_dict['label']
+        cls_loss = self.loss_func(pred_dict['cls'], label)
+        losses = {'overall': cls_loss, 'cls': cls_loss}
+        if self.vicreg_loss is not None and self.mode == 'dual':
+            feat_dict = pred_dict['feat']
+            z_pixel = self.exp_pixel(feat_dict['y_pixel'])
+            z_freq = self.exp_freq(feat_dict['y_freq'])
+            vic_loss, vic_loss_dict = self.vicreg_loss(z_pixel, z_freq)
+            losses['vicreg'] = vic_loss
+            losses.update(vic_loss_dict)
+            losses['overall'] = cls_loss + self.vicreg_weight * vic_loss
+        return losses
 
     def forward(self, data_dict, inference=False):
 
