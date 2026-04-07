@@ -287,6 +287,7 @@ class Trainer(object):
                     # tensorboard-1. loss
                     writer = self.get_writer('train', ','.join(self.config['train_dataset']), k)
                     writer.add_scalar(f'train_loss/{k}', v_avg, global_step=step_cnt)
+                    train_log[f"train_loss/{k}"] = v_avg
                 self.logger.info(loss_str)
                 # info for metric
                 metric_str = f"Iter: {step_cnt}    "
@@ -302,6 +303,7 @@ class Trainer(object):
                     # tensorboard-2. metric
                     writer = self.get_writer('train', ','.join(self.config['train_dataset']), k)
                     writer.add_scalar(f'train_metric/{k}', v_avg, global_step=step_cnt)
+                    train_log[f"train_metric/{k}"] = v_avg
                 self.logger.info(metric_str)
                 wandb.log(train_log, step=step_cnt)
 

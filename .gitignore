@@ -6,3 +6,8 @@
 *.pt
 *.dat
 logs/
+wandb/
+fpr_degradation_results/
+confusion_matrix_results/
+*.csv
+*.pdf

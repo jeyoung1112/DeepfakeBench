@@ -1,4 +1,3 @@
-mode: test
 lmdb: false
 rgb_dir: '/media/NAS/DATASET/DeepfakeBench/original/dataset'
 lmdb_dir:  './datasets/lmdb'

@@ -24,7 +24,7 @@ class PixelBranch(nn.Module):
         lora_targets = config.get('lora_targets', ['q_proj', 'v_proj'])
 
         clip_model = CLIPVisionModel.from_pretrained(model_name)
-        self.vision = clip_model.vision_model
+        vision = clip_model.vision_model
         self.processor = CLIPImageProcessor.from_pretrained(model_name)
         self.out_dim = self.VARIANTS[model_name]
 
@@ -35,7 +35,7 @@ class PixelBranch(nn.Module):
             target_modules=lora_targets,
             bias="none",
         )
-        self.encoder = get_peft_model(self.vision, lora_config)
+        self.encoder = get_peft_model(vision, lora_config)
 
         for name, param in self.encoder.named_parameters():
             if "lora_" not in name:

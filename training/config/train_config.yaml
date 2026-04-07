@@ -1,4 +1,3 @@
-mode: train
 lmdb: false
 dry_run: false
 rgb_dir: '/media/NAS/DATASET/DeepfakeBench/original/dataset'

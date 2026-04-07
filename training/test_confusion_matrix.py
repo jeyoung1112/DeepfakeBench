@@ -112,16 +112,16 @@ def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold
 
     # Save plot
     os.makedirs(output_dir, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Real', 'Fake'])
-    disp.plot(ax=ax, colorbar=True, cmap='Blues')
-    ax.set_title(f"{dataset_name}\n(threshold={threshold})")
+    # fig, ax = plt.subplots(figsize=(5, 4))
+    # disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Real', 'Fake'])
+    # disp.plot(ax=ax, colorbar=True, cmap='Blues')
+    # ax.set_title(f"{dataset_name}\n(threshold={threshold})")
     safe_name = dataset_name.replace('/', '_').replace('\\', '_')
-    save_path = os.path.join(output_dir, f"{args.model_name}_{args.test_dataset[0]}_cm_{safe_name}.png")
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-    print(f"  Plot saved → {save_path}")
+    # save_path = os.path.join(output_dir, f"{args.model_name}_{args.test_dataset[0]}_cm_{safe_name}.png")
+    # plt.tight_layout()
+    # plt.savefig(save_path, dpi=150)
+    # plt.close()
+    # print(f"  Plot saved → {save_path}")
 
     fpr_curve, tpr_curve, _ = roc_curve(y_true, y_pred.squeeze())
     sklearn_auc = roc_auc_score(y_true, y_pred.squeeze())
@@ -130,6 +130,8 @@ def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold
     eer = (fpr_curve[eer_idx] + fnr_curve[eer_idx]) / 2.0
     tpr_at_fpr1 = tpr_curve[np.searchsorted(fpr_curve, 0.01, side='right') - 1]
     tpr_at_fpr5 = tpr_curve[np.searchsorted(fpr_curve, 0.05, side='right') - 1]
+    fpr_at_tpr1 = fpr_curve[np.searchsorted(tpr_curve, 0.01, side='left')]
+    fpr_at_tpr5 = fpr_curve[np.searchsorted(tpr_curve, 0.05, side='left')]
 
     metrics = {
     "dataset": dataset_name,
@@ -146,6 +148,24 @@ def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold
     with open(json_path, 'w') as f:
         json.dump(metrics, f, indent=2)
     print(f"  Metrics saved → {json_path}")
+
+    # ROC curve plot
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.plot(fpr_curve, tpr_curve, lw=1.8, label=f'AUC = {sklearn_auc:.4f}')
+    ax.plot([0, 1], [0, 1], 'k--', lw=1)
+    ax.scatter(fpr_curve[eer_idx], tpr_curve[eer_idx], marker='o', color='red',
+               zorder=5, label=f'EER = {eer:.4f}')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title(f'ROC — {dataset_name}')
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    roc_path = os.path.join(output_dir, f"{args.model_name}_{args.test_dataset[0]}_roc_{safe_name}.png")
+    plt.savefig(roc_path, dpi=150)
+    plt.close()
+    print(f"  ROC curve saved → {roc_path}")
 
     return cm
 
@@ -212,6 +232,19 @@ def main():
         # Strip 'module.' prefix added by nn.DataParallel during training
         if all(k.startswith('module.') for k in ckpt.keys()):
             ckpt = {k[len('module.'):]: v for k, v in ckpt.items()}
+        # Remap checkpoint keys saved under old architecture naming
+        # (pixel_branch.vision.X -> backbone.base_model.model.X)
+        if any(k.startswith('pixel_branch.vision.') for k in ckpt.keys()):
+            ckpt = {
+                k.replace('pixel_branch.vision.', 'backbone.base_model.model.'): v
+                for k, v in ckpt.items()
+            }
+        # Drop legacy top-level 'backbone.*' keys: an older version of
+        # DualBranchDetector stored the pixel-branch CLIP model under
+        # self.backbone; the current model stores it under
+        # pixel_branch.encoder.*, so backbone.* are duplicates we can discard.
+        if any(k.startswith('backbone.') for k in ckpt.keys()):
+            ckpt = {k: v for k, v in ckpt.items() if not k.startswith('backbone.')}
         model.load_state_dict(ckpt, strict=True)
         print('===> Checkpoint loaded.')
     else:

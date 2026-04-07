@@ -3,7 +3,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score
 from metrics.base_metrics_class import calculate_metrics_for_train
 
 from networks.pixel_branch import PixelBranch
@@ -66,10 +65,6 @@ class DualBranchDetector(AbstractDetector):
         # VICReg weight
         self.vicreg_weight = config.get('vicreg_weight', 0.1)
  
-        # Metric accumulators (DeepfakeBench convention)
-        self.prob, self.label = [], []
-        self.correct, self.total = 0, 0
-
         self._log_params()
     
     def _log_params(self):
@@ -142,50 +137,6 @@ class DualBranchDetector(AbstractDetector):
         metric_batch_dict = {'acc': acc, 'auc': auc, 'eer': eer, 'ap': ap}
         return metric_batch_dict
     
-    def get_test_metrics(self):
-        """
-        Compute test metrics from accumulated predictions.
-        Called at the end of test epoch.
-        """
-        # Concatenate accumulated predictions
-        y_pred = np.concatenate(self.prob)
-        y_true = np.concatenate(self.label)
- 
-        # Compute AUC
-        try:
-            auc = roc_auc_score(y_true, y_pred)
-        except ValueError:
-            auc = 0.5
- 
-        # Compute accuracy at 0.5 threshold
-        acc = ((y_pred >= 0.5) == y_true).mean()
- 
-        # TPR @ FPR thresholds
-        from sklearn.metrics import roc_curve
-        fpr, tpr, _ = roc_curve(y_true, y_pred)
- 
-        tpr_at_fpr1 = float(tpr[max(0, (fpr <= 0.01).sum() - 1)])
-        tpr_at_fpr5 = float(tpr[max(0, (fpr <= 0.05).sum() - 1)])
- 
-        # EER
-        fnr = 1 - tpr
-        eer_idx = np.nanargmin(np.abs(fpr - fnr))
-        eer = float(fpr[eer_idx])
- 
-        metric_dict = {
-            'auc': auc,
-            'acc': acc,
-            'eer': eer,
-            'tpr@fpr1%': tpr_at_fpr1,
-            'tpr@fpr5%': tpr_at_fpr5,
-        }
- 
-        # Reset accumulators
-        self.prob, self.label = [], []
-        self.correct, self.total = 0, 0
- 
-        return metric_dict
-
     def features(self, data_dict: dict) -> dict:
         img = data_dict['image']
         feat_dict = {'y_pixel': None, 'y_freq': None}
@@ -200,7 +151,7 @@ class DualBranchDetector(AbstractDetector):
         cls_loss = self.loss_func(pred_dict['cls'], label)
         losses = {'overall': cls_loss, 'cls': cls_loss}
         if self.vicreg_loss is not None and self.mode == 'dual':
-            feat_dict = pred_dict['feat']
+            feat_dict = pred_dict['feat_dict']
             z_pixel = self.exp_pixel(feat_dict['y_pixel'])
             z_freq = self.exp_freq(feat_dict['y_freq'])
             vic_loss, vic_loss_dict = self.vicreg_loss(z_pixel, z_freq)
@@ -217,16 +168,18 @@ class DualBranchDetector(AbstractDetector):
  
         prob = torch.softmax(pred, dim=1)[:, 1]
  
+        parts = []
+        if feat_dict['y_pixel'] is not None:
+            parts.append(feat_dict['y_pixel'])
+        if feat_dict['y_freq'] is not None:
+            parts.append(feat_dict['y_freq'])
+        feat_tensor = torch.cat(parts, dim=-1) if parts else pred.new_zeros(pred.size(0), 0)
+
         pred_dict = {
             'cls': pred,
             'prob': prob,
-            'feat': feat_dict,
+            'feat': feat_tensor,
+            'feat_dict': feat_dict,
         }
- 
-        if inference:
-            self.prob.append(prob.detach().cpu().numpy())
-            self.label.append(
-                data_dict['label'].detach().cpu().numpy()
-            )
  
         return pred_dict

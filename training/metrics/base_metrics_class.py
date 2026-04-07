@@ -194,6 +194,8 @@ class Recorder:
         self.num = 0
     def update(self, item, num=1):
         if item is not None:
+            if hasattr(item, 'item'):
+                item = item.item()
             self.sum += item * num
             self.num += num
     def average(self):
