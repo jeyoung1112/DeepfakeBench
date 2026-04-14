@@ -4,7 +4,8 @@ import json
 import re
 
 target_path = "./confusion_matrix_results"
-target_files = glob.glob(target_path + "/*.json")
+# target_files = glob.glob(target_path + "/*.json")
+target_files = glob.glob(target_path + "/*_dfdcp_*.json")
 
 metrics = [
     "tp", "fp", "fn", "tn",

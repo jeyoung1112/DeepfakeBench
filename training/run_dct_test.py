@@ -10,7 +10,7 @@ import yaml
 
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--config', default='./training/confusion_config.yaml',
+parser.add_argument('--config', default='./training/confusion_config_nonvit.yaml',
                     help='Path to confusion config YAML (default: %(default)s)')
 args = parser.parse_args()
 
@@ -50,7 +50,7 @@ for i, (model_name, detector_path, weights_path) in enumerate(entries):
     print(f"{'='*60}")
 
     cmd = [
-        sys.executable, os.path.join(os.path.dirname(__file__), 'test_confusion_matrix.py'),
+        sys.executable, os.path.join(os.path.dirname(__file__), 'test_clip_lora.py'),
         '--model_name',    model_name,
         '--detector_path', detector_path,
         '--weights_path',  weights_path,

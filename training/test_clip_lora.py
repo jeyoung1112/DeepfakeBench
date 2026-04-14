@@ -19,6 +19,7 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve,
 from dataset.abstract_dataset import DeepfakeAbstractBaseDataset
 from detectors import DETECTOR
 from metrics.utils import get_test_metrics
+from scipy.fft import dctn
 
 parser = argparse.ArgumentParser(description='Test with confusion matrix output.')
 parser.add_argument('--model_name', type=str)
@@ -83,12 +84,90 @@ def test_one_dataset(model, data_loader):
             data_dict['landmark'] = landmark.to(device)
 
         predictions = inference(model, data_dict)
-        label_lists += list(data_dict['label'].cpu().detach().numpy())
+        label_lists     += list(data_dict['label'].cpu().detach().numpy())
         prediction_lists += list(predictions['prob'].cpu().detach().numpy())
-        feature_lists += list(predictions['feat'].cpu().detach().numpy())
+        feature_lists   += list(predictions['feat'].cpu().detach().numpy())
 
     return np.array(prediction_lists), np.array(label_lists), np.array(feature_lists)
 
+
+def save_image_paths_by_category(y_pred, y_true, img_paths, threshold, dataset_name, output_dir):
+    """Categorise image paths into TP/TN/FP/FN and save as JSON."""
+    y_binary = (y_pred.squeeze() > threshold).astype(int)
+    img_paths = np.array(img_paths)
+
+    categorised = {
+        "tp": img_paths[(y_binary == 1) & (y_true == 1)].tolist(),
+        "tn": img_paths[(y_binary == 0) & (y_true == 0)].tolist(),
+        "fp": img_paths[(y_binary == 1) & (y_true == 0)].tolist(),
+        "fn": img_paths[(y_binary == 0) & (y_true == 1)].tolist(),
+    }
+
+    os.makedirs(output_dir, exist_ok=True)
+    safe_name = dataset_name.replace('/', '_').replace('\\', '_')
+    json_path = os.path.join(output_dir, f"{args.model_name}_{safe_name}_image_paths.json")
+    with open(json_path, 'w') as f:
+        json.dump(categorised, f, indent=2)
+    print(f"  Image paths saved → {json_path}  "
+          f"(TP={len(categorised['tp'])} TN={len(categorised['tn'])} "
+          f"FP={len(categorised['fp'])} FN={len(categorised['fn'])})")
+
+def _dct_heatmap(images_chw):
+    """Average log-DCT heatmap over a batch of CHW images."""
+    if len(images_chw) == 0:
+        return None
+    maps = []
+    for img in images_chw:
+        # CHW → grayscale HW by averaging channels
+        gray = img.mean(axis=0)
+        # Normalise to [0,1] so different normalisations don't distort the DCT
+        gray = (gray - gray.min()) / (gray.ptp() + 1e-8)
+        dct = dctn(gray, norm='ortho')
+        maps.append(np.log(np.abs(dct) + 1e-8))
+    return np.mean(maps, axis=0)
+
+def plot_dct_heatmaps(images, labels, y_pred, threshold, dataset_name, output_dir, model_name):
+    """
+    Plots 4-panel DCT heatmap: Real | Fake | FP | FN
+    """
+    y_binary = (y_pred.squeeze() > threshold).astype(int)
+    is_real = labels == 0
+    is_fake = labels == 1
+    fp_mask = (y_binary == 1) & is_real   # predicted fake, actually real
+    fn_mask = (y_binary == 0) & is_fake   # predicted real, actually fake
+
+    groups = {
+        f'Real  (n={is_real.sum()})': images[is_real],
+        f'Fake  (n={is_fake.sum()})': images[is_fake],
+        f'FP    (n={fp_mask.sum()})': images[fp_mask],
+        f'FN    (n={fn_mask.sum()})': images[fn_mask],
+    }
+
+    heatmaps = {title: _dct_heatmap(imgs) for title, imgs in groups.items()}
+
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4))
+    fig.suptitle(f'DCT heatmaps — {model_name} | {dataset_name}', fontsize=12)
+
+    vmin = min(h.min() for h in heatmaps.values() if h is not None)
+    vmax = max(h.max() for h in heatmaps.values() if h is not None)
+
+    for ax, (title, hmap) in zip(axes, heatmaps.items()):
+        if hmap is None:
+            ax.set_title(f'{title}\n(no samples)')
+            ax.axis('off')
+            continue
+        im = ax.imshow(hmap, cmap='inferno', vmin=vmin, vmax=vmax, aspect='auto')
+        ax.set_title(title, fontsize=9)
+        ax.axis('off')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+    os.makedirs(output_dir, exist_ok=True)
+    safe_name = dataset_name.replace('/', '_').replace('\\', '_')
+    save_path = os.path.join(output_dir, f'{model_name}_{safe_name}_dct_heatmap.png')
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    print(f'  DCT heatmap saved → {save_path}')
 
 def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold, output_dir):
     y_binary = (y_pred.squeeze() > threshold).astype(int)
@@ -148,24 +227,6 @@ def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold
     with open(json_path, 'w') as f:
         json.dump(metrics, f, indent=2)
     print(f"  Metrics saved → {json_path}")
-
-    # ROC curve plot
-    fig, ax = plt.subplots(figsize=(5, 5))
-    ax.plot(fpr_curve, tpr_curve, lw=1.8, label=f'AUC = {sklearn_auc:.4f}')
-    ax.plot([0, 1], [0, 1], 'k--', lw=1)
-    ax.scatter(fpr_curve[eer_idx], tpr_curve[eer_idx], marker='o', color='red',
-               zorder=5, label=f'EER = {eer:.4f}')
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_xlabel('False Positive Rate')
-    ax.set_ylabel('True Positive Rate')
-    ax.set_title(f'ROC — {dataset_name}')
-    ax.legend(fontsize=9)
-    plt.tight_layout()
-    roc_path = os.path.join(output_dir, f"{args.model_name}_{args.test_dataset[0]}_roc_{safe_name}.png")
-    plt.savefig(roc_path, dpi=150)
-    plt.close()
-    print(f"  ROC curve saved → {roc_path}")
 
     return cm
 
@@ -229,25 +290,9 @@ def main():
     weights_path = config.get('weights_path')
     if weights_path:
         ckpt = torch.load(weights_path, map_location=device)
-        if isinstance(ckpt, dict) and 'state_dict' in ckpt and isinstance(ckpt['state_dict'], dict):
-            ckpt = ckpt['state_dict']
         # Strip 'module.' prefix added by nn.DataParallel during training
         if all(k.startswith('module.') for k in ckpt.keys()):
             ckpt = {k[len('module.'):]: v for k, v in ckpt.items()}
-        model_keys = set(model.state_dict().keys())
-        model_expects_backbone = any(k.startswith('backbone.') for k in model_keys)
-        # Remap checkpoint keys saved under old architecture naming
-        # (pixel_branch.vision.X -> backbone.base_model.model.X)
-        if model_expects_backbone and any(k.startswith('pixel_branch.vision.') for k in ckpt.keys()):
-            ckpt = {
-                k.replace('pixel_branch.vision.', 'backbone.base_model.model.'): v
-                for k, v in ckpt.items()
-            }
-        # Drop legacy top-level 'backbone.*' keys only when the current model
-        # does not use a backbone.* namespace (e.g., DualBranchDetector now
-        # stores the CLIP encoder under pixel_branch.encoder.*).
-        if (not model_expects_backbone) and any(k.startswith('backbone.') for k in ckpt.keys()):
-            ckpt = {k: v for k, v in ckpt.items() if not k.startswith('backbone.')}
         model.load_state_dict(ckpt, strict=True)
         print('===> Checkpoint loaded.')
     else:
@@ -277,9 +322,15 @@ def main():
         all_cms[dataset_name] = cm
         score_results.append((dataset_name, predictions_nps, label_nps))
 
-    # Score distributions — all datasets in one figure
-    plot_all_score_distributions(score_results, threshold=args.threshold, output_dir=args.output_dir)
+        save_image_paths_by_category(
+            predictions_nps, label_nps, data_dict['image'],
+            threshold=args.threshold,
+            dataset_name=dataset_name,
+            output_dir=args.output_dir,
+        )
 
+    # Score distributions — all datasets in one figure
+    # plot_all_score_distributions(score_results, threshold=args.threshold, output_dir=args.output_dir)
     print('\n===> All done.')
 
 

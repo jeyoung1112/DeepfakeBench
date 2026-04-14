@@ -181,7 +181,7 @@ class Trainer(object):
             pickle.dump(metric_one_dataset, file)
         self.logger.info(f"Metrics saved to {file_path}")
 
-    def train_step(self,data_dict):
+    def train_step(self,data_dict, accum_steps=1):
         if self.config['optimizer']['type']=='sam':
             for i in range(2):
                 predictions = self.model(data_dict)
@@ -203,10 +203,13 @@ class Trainer(object):
                 losses = self.model.module.get_losses(data_dict, predictions)
             else:
                 losses = self.model.get_losses(data_dict, predictions)
-            self.optimizer.zero_grad()
-            losses['overall'].backward()
-            self.optimizer.step()
 
+            # self.optimizer.zero_grad()
+            # losses['overall'].backward()
+            # self.optimizer.step()
+
+            scaled_loss = losses["overall"] / accum_steps
+            scaled_loss.backward()
 
             return losses,predictions
 
@@ -237,6 +240,9 @@ class Trainer(object):
         train_recorder_loss = defaultdict(Recorder)
         train_recorder_metric = defaultdict(Recorder)
 
+        accum_steps = self.config.get('grad_accum_steps', 1)
+        self.optimizer.zero_grad()
+
         for iteration, data_dict in tqdm(enumerate(train_data_loader),total=len(train_data_loader)):
             self.setTrain()
             # more elegant and more scalable way of moving data to GPU
@@ -244,7 +250,14 @@ class Trainer(object):
                 if data_dict[key]!=None and key!='name':
                     data_dict[key]=data_dict[key].cuda()
 
-            losses,predictions=self.train_step(data_dict)
+            # losses,predictions=self.train_step(data_dict)
+
+            losses,predictions=self.train_step(data_dict, accum_steps)
+
+            ## Gradient Accumulation
+            if (iteration + 1) % accum_steps == 0:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
             # update learning rate
 

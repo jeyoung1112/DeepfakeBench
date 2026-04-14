@@ -1,15 +1,15 @@
 """
-Compare how different image conditions affect the DCT profile of real images.
+Compare how different image conditions affect the DFT profile of real images.
 
 Applies a configurable set of transforms to the same real frames and plots:
-  - Average DCT heatmap per condition
+  - Average DFT heatmap per condition
   - Radial energy curves overlaid on one plot
   - Difference heatmaps relative to the baseline condition
 
 Usage:
     python dct_condition_comparison.py
     python dct_condition_comparison.py --conditions jpeg_40 jpeg_85 blur_3 noise_15
-    python dct_condition_comparison.py --max 200 --out dct_conditions.png
+    python dct_condition_comparison.py --max 200 --out dft_conditions.png
 
 Built-in conditions:
     baseline          no transform
@@ -39,7 +39,7 @@ Built-in conditions:
     noise_<s>         Additive Gaussian noise, sigma=s   e.g. noise_5, noise_15, noise_30
 
     -- Brightness shift (affects DC component and low-freq energy) --
-    brightness_<d>    Add delta d to pixel values        e.g. brightness_30, brightness_n30
+    brightness_<a>    Scale pixels by alpha=a/10         e.g. brightness_8, brightness_12, brightness_15
 
     -- Device pipelines --
     phone             noise σ=8 + blur + JPEG q=92
@@ -55,7 +55,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.fft import dctn
+from scipy.fft import fft2
 
 # ---------------------------------------------------------------------------
 # Dataset config
@@ -73,12 +73,12 @@ DEFAULT_CONDITIONS = [
 # Conditions grouped by the FPR-risk mechanism they target.
 # Use these as --conditions presets for focused analysis.
 FPR_CONDITIONS = {
-    "jpeg":    ["baseline", "jpeg_40", "jpeg_60", "jpeg_75", "jpeg_85", "jpeg_95"],
+    "jpeg":    ["baseline", "jpeg_10", "jpeg_20", "jpeg_30", "jpeg_50", "jpeg_70", "jpeg_90"],
     "resize":  ["baseline", "bicubic_2", "bicubic_4", "lanczos_2", "lanczos_4", "downup_2", "downup_4"],
     "social":  ["baseline", "whatsapp", "facebook", "twitter", "instagram", "wechat", "line_app"],
     "sharpen": ["baseline", "sharpen_05", "sharpen_10", "sharpen_20", "sharpen_30"],
-    "smooth":      ["baseline", "blur_1", "blur_3", "median_3", "median_5"],
-    "brightness":  ["baseline", "brightness_n50", "brightness_n30", "brightness_30", "brightness_50", "brightness_80"],
+    "blur":      ["baseline","blur_05", "blur_10", "blur_20", "blur_30", "blur_50"],
+    "brightness":  ["baseline", "brightness_5", "brightness_8", "brightness_12", "brightness_15"],
 }
 
 # ---------------------------------------------------------------------------
@@ -111,8 +111,9 @@ def _noise(img: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarra
     return np.clip(noisy, 0, 255).astype(np.uint8)
 
 
-def _brightness(img: np.ndarray, delta: int) -> np.ndarray:
-    return np.clip(img.astype(np.int16) + delta, 0, 255).astype(np.uint8)
+def apply_brightness(img_np: np.ndarray, amount: float) -> np.ndarray:
+    """Unsharp masking: sharpened = img + amount * (img - blurred(img, sigma=3))."""
+    return cv2.convertScaleAbs(img_np, alpha=amount, beta=0)
 
 
 def _sharpen(img: np.ndarray, strength: float) -> np.ndarray:
@@ -160,7 +161,7 @@ def apply_condition(img: np.ndarray, condition: str, rng: np.random.Generator) -
     # parametric: blur_<sigma>  (e.g. blur_3 → sigma=3, blur_15 → sigma=1.5)
     m = re.fullmatch(r"blur_(\d+)", condition)
     if m:
-        sigma = int(m.group(1)) / 10 if int(m.group(1)) > 9 else int(m.group(1))
+        sigma = int(m.group(1)) / 10
         return _blur(img, float(sigma))
 
     # parametric: noise_<sigma>
@@ -197,14 +198,10 @@ def apply_condition(img: np.ndarray, condition: str, rng: np.random.Generator) -
             k += 1  # kernel must be odd
         return cv2.medianBlur(img, k)
 
-    # parametric: brightness_<delta>  — positive or negative offset
-    # Use 'n' prefix for negative: brightness_n30 → delta=-30
-    m = re.fullmatch(r"brightness_n(\d+)", condition)
-    if m:
-        return _brightness(img, -int(m.group(1)))
+    # parametric: brightness_<alpha*10>  e.g. brightness_15 → alpha=1.5
     m = re.fullmatch(r"brightness_(\d+)", condition)
     if m:
-        return _brightness(img, int(m.group(1)))
+        return apply_brightness(img, int(m.group(1)) / 10)
 
     # named social-media / device pipelines
     if condition == "whatsapp":
@@ -277,12 +274,9 @@ def condition_label(condition: str) -> str:
     m = re.fullmatch(r"sharpen_(\d+)", condition)
     if m:
         return f"Sharpen ×{int(m.group(1))/10:.1f}"
-    m = re.fullmatch(r"brightness_n(\d+)", condition)
-    if m:
-        return f"Bright −{m.group(1)}"
     m = re.fullmatch(r"brightness_(\d+)", condition)
     if m:
-        return f"Bright +{m.group(1)}"
+        return f"Bright ×{int(m.group(1))/10:.1f}"
     return condition
 
 
@@ -290,7 +284,7 @@ def condition_label(condition: str) -> str:
 # DCT computation
 # ---------------------------------------------------------------------------
 
-def compute_dct_profile(
+def compute_dft_profile(
     paths: list[str],
     condition: str,
     size: tuple[int, int],
@@ -299,7 +293,7 @@ def compute_dct_profile(
 ) -> dict:
     """
     Returns:
-        mean_heatmap  : [0,1] float32 (H, W) — averaged log-DCT magnitude
+        mean_heatmap  : [0,1] float32 (H, W) — averaged log-DFT magnitude
         mean_radial   : 1-D energy vs. radial frequency
         std_radial    : std of radial energy across frames
         freqs         : radial frequency bins
@@ -321,8 +315,8 @@ def compute_dct_profile(
         if img.shape[:2] != (size[1], size[0]):
             img = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
 
-        dct = dctn(img.astype(np.float32), norm="ortho")
-        log_mag = np.log1p(np.abs(dct))
+        dft = fft2(img.astype(np.float32))
+        log_mag = np.log1p(np.abs(np.fft.fftshift(dft)))
 
         if heatmap_acc is None:
             heatmap_acc = log_mag.copy()
@@ -330,10 +324,10 @@ def compute_dct_profile(
             heatmap_acc += log_mag
 
         # radial energy
-        h, w = dct.shape
+        h, w = dft.shape
         cy, cx = h // 2, w // 2
-        shifted = np.fft.fftshift(dct)
-        power = shifted ** 2
+        shifted = np.fft.fftshift(dft)
+        power = np.abs(shifted) ** 2
         y, x = np.ogrid[:h, :w]
         r = np.sqrt((x - cx) ** 2 + (y - cy) ** 2).astype(int)
         max_r = min(cx, cy)
@@ -376,7 +370,7 @@ def plot_results(profiles: list[dict], baseline_label: str, out_path: str | None
     #   Row 1: difference vs baseline (skip baseline itself)
     #   Row 2 (full width): radial energy curves
     fig = plt.figure(figsize=(max(14, 3.2 * n), 12))
-    fig.suptitle("DCT Profile — Real Images Under Different Conditions", fontsize=13)
+    fig.suptitle("DFT Profile — Real Images Under Different Conditions", fontsize=13)
 
     gs = fig.add_gridspec(3, n, height_ratios=[1, 1, 0.9], hspace=0.45, wspace=0.15)
 
@@ -418,7 +412,7 @@ def plot_results(profiles: list[dict], baseline_label: str, out_path: str | None
 
     ax_r.set_xlabel("Radial frequency (pixels from DC)", fontsize=10)
     ax_r.set_ylabel("Mean energy (log scale)", fontsize=10)
-    ax_r.set_title("Radial frequency energy — all conditions", fontsize=10)
+    ax_r.set_title("Radial frequency energy (DFT) — all conditions", fontsize=10)
     ax_r.legend(ncol=min(n, 6), fontsize=8, loc="upper right")
     ax_r.grid(True, which="both", linestyle="--", alpha=0.4)
 
@@ -479,7 +473,7 @@ def main():
     profiles = []
     for cond in conditions:
         try:
-            prof = compute_dct_profile(paths, cond, size, args.max, args.seed)
+            prof = compute_dft_profile(paths, cond, size, args.max, args.seed)
             profiles.append(prof)
         except ValueError as e:
             print(f"  [skip] {e}")

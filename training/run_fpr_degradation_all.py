@@ -14,7 +14,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=str,
-                    default='./training/confusion_config.yaml')
+                    default='./training/confusion_config_nonvit.yaml')
 parser.add_argument('--threshold', type=float, default=0.5)
 parser.add_argument('--output_dir', type=str,
                     default='./fpr_degradation_results')
