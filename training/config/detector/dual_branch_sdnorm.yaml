@@ -1,4 +1,4 @@
-detector_name: dual_branch_sdnorm
+model_name: dual_branch_sdnorm
 mode: dual
 
 # --- Pixel Branch ---
@@ -15,8 +15,10 @@ freq_backbone_config:
   inc: 6              # 3 magnitude + 3 phase channels
   num_classes: 512
 freq_out_dim: 512
-resolution: 224
 fft_log_scale: true   # log(1 + |F|) for magnitude
+
+mean: [0.48145466, 0.4578275, 0.40821073]
+std:  [0.26862954, 0.26130258, 0.27577711]
 
 # --- SDNorm (FFT variant) ---
 use_sdnorm: true
@@ -46,8 +48,13 @@ loss_func: cross_entropy
 # --- Training ---
 optimizer:
   type: adam
-  lr: 1.0e-4
-  weight_decay: 1.0e-5
+  adam:
+    lr: 0.0002  # learning rate
+    beta1: 0.9  # beta1 for Adam optimizer
+    beta2: 0.999 # beta2 for Adam optimizer
+    eps: 0.00000001  # epsilon for Adam optimizer
+    weight_decay: 0.0005  # weight decay for regularization
+    amsgrad: false
 scheduler:
   type: cosine
   T_max: 50
@@ -56,6 +63,58 @@ batch_size: 32
 num_epochs: 50
 seed: 42
 
-train_dataset: FaceForensics++
-compression: c23
-frame_num: 32
+lr_scheduler: null
+
+lr_scheduler: null   # learning rate scheduler
+nEpochs: 10   # number of epochs to train for
+start_epoch: 0   # manual epoch number (useful for restarts)
+save_epoch: 1   # interval epochs for saving models
+rec_iter: 100   # interval iterations for recording
+logdir: ./logs   # folder to output images and logs
+manualSeed: 1024   # manual seed for random number generation
+save_ckpt: true   # whether to save checkpoint
+save_feat: true   # whether to save features
+
+batchSize: 32
+frame_num: {'train': 32, 'test': 32}   # number of frames to use per video in training and testing
+resolution: 224   # resolution of output image to network
+
+# Dataset 
+train_dataset: ['FaceForensics++']
+test_dataset: ['FaceForensics++']
+# train_dataset: [Celeb-DF-v2]
+# test_dataset: [Celeb-DF-v2]
+compression: 'c23'
+train_batchSize: 32
+test_batchSize: 32
+workers: 8
+manualSeed: 1024   # manual seed for random number generation
+with_mask: false   # whether to include mask information in the input
+with_landmark: false   # whether to include facial landmark information in the input
+
+# --- Data Augmentation ---
+# When true: augmentation applied ONLY to the pixel (CLIP) branch at the detector level.
+# The frequency branch always receives the original clean tensor.
+# When false: no augmentation for either branch.
+use_data_augmentation: false
+data_aug:
+  flip_prob: 0.5
+  rotate_prob: 0.5
+  rotate_limit: 10        # degrees
+  blur_prob: 0.5
+  blur_limit: 7           # max kernel size (odd number)
+  brightness_prob: 0.5
+  brightness_limit: 0.1
+  contrast_limit: 0.1
+  quality_lower: 40
+  quality_upper: 100
+
+metric_scoring: auc   # metric for evaluation (auc, acc, eer, ap)
+
+cuda: true   # whether to use CUDA acceleration
+cudnn: true   # whether to use CuDNN for convolution operations
+
+# Logging & checkpoints
+log_dir: './logs/dual_branch'
+save_ckpt: true
+save_feat: false

@@ -50,4 +50,4 @@ from .dino_probing import DINOProbing
 from .dino_lora import DINOLora
 from .gend_detector import GenDDetector
 from .dual_branch import DualBranchDetector
-from .dual_branch_sdnrom import SDNormDualBranchDetector
+from .dual_branch_sdnorm import DualBranchSDNormDetector

@@ -14,15 +14,14 @@ class FFTTransform(nn.Module):
         self.center = center
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """[B, 3, H, W] → [B, 6, H, W] (mag 3ch + phase 3ch)."""
-        fft_complex = torch.fft.fft2(x, norm='ortho')
+        fft_transformed = torch.fft.fft2(x, norm='ortho')
         if self.center:
-            fft_complex = torch.fft.fftshift(fft_complex, dim=(-2, -1))
-        magnitude = fft_complex.abs()
-        phase = fft_complex.angle()
+            fft_transformed = torch.fft.fftshift(fft_transformed, dim=(-2, -1))
+        magnitude = fft_transformed.abs()
+        phase = fft_transformed.angle()
         if self.log_scale:
             magnitude = torch.log1p(magnitude)
-        phase = phase / torch.pi  # normalise to [-1, 1]
+        phase = phase / torch.pi
         return torch.cat([magnitude, phase], dim=1)
 
 class FrequencyBranch(nn.Module):
@@ -39,12 +38,10 @@ class FrequencyBranch(nn.Module):
         if self.use_sdnorm:
             sc = config.get('sdnorm_config', {})
             self.sdnorm = SDNorm(
-                size=img_size, 
+                size=img_size,
                 num_rings=sc.get('num_rings', 4),
-                in_channels=6, 
                 num_mag_channels=3,
                 eps=sc.get('eps', 1e-5), 
-                aug_prob=sc.get('aug_prob', 0.5),
                 learnable_affine=sc.get('learnable_affine', True),
                 sharpness=sc.get('sharpness', 5.0),
             )
@@ -79,7 +76,7 @@ class FrequencyBranch(nn.Module):
 
 @BACKBONE.register_module(module_name="resnet18_freq")
 class ResNetBackbone(nn.Module):
-    """ResNet-18 for FFT magnitude+phase. 6-channel input."""
+    """ResNet-18 for magnitude+phase. 6-channel input."""
     def __init__(self, config):
         super().__init__()
         in_channels = config.get('inc', 6)

@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms.v2 as T
 from metrics.base_metrics_class import calculate_metrics_for_train
 
 from networks.pixel_branch import PixelBranch
@@ -67,6 +68,9 @@ class DualBranchSDNormDetector(AbstractDetector):
         # VICReg weight
         self.vicreg_weight = config.get('vicreg_weight', 0.1)
 
+        # Pixel-only augmentation (freq branch always sees the clean tensor)
+        self.pixel_aug = self._build_pixel_aug(config) if config.get('use_data_augmentation', False) else None
+
         self._log_params()
 
     def _log_params(self):
@@ -103,6 +107,21 @@ class DualBranchSDNormDetector(AbstractDetector):
             f"DualBranchSDNorm [{self.mode}]: "
             f"{trainable:,} trainable / {total:,} total"
         )
+
+    @staticmethod
+    def _build_pixel_aug(config):
+        aug = config.get('data_aug', {})
+        return T.Compose([
+            T.RandomHorizontalFlip(p=aug.get('flip_prob', 0.5)),
+            T.RandomApply([T.RandomRotation(degrees=aug.get('rotate_limit', 10))],
+                          p=aug.get('rotate_prob', 0.5)),
+            T.RandomApply([T.GaussianBlur(kernel_size=aug.get('blur_limit', 7))],
+                          p=aug.get('blur_prob', 0.5)),
+            T.RandomApply([T.ColorJitter(
+                brightness=aug.get('brightness_limit', 0.1),
+                contrast=aug.get('contrast_limit', 0.1),
+            )], p=aug.get('brightness_prob', 0.5)),
+        ])
 
     def classifier(self, feat_dict):
         parts = []
@@ -163,9 +182,11 @@ class DualBranchSDNormDetector(AbstractDetector):
 
     def features(self, data_dict: dict) -> dict:
         img = data_dict['image']
+        # Apply pixel-only augmentation during training; freq branch always sees clean img
+        img_pixel = self.pixel_aug(img) if (self.pixel_aug is not None and self.training) else img
         feat_dict = {'y_pixel': None, 'y_freq': None}
         if self.pixel_branch is not None:
-            feat_dict['y_pixel'] = self.pixel_branch(img)
+            feat_dict['y_pixel'] = self.pixel_branch(img_pixel)
         if self.freq_branch is not None:
             feat_dict['y_freq'] = self.freq_branch(img)
         return feat_dict

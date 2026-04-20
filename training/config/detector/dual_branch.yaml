@@ -20,6 +20,15 @@ freq_backbone_config:
 freq_out_dim: 512
 dct_log_scale: true
 
+# Frequency Branch (DCT + CNN)
+# freq_backbone: 'resnet18_freq'  # "resnet18_freq" or "xception"
+# freq_backbone_name: 'resnet18_freq'
+# freq_backbone_config:
+#   inc: 3
+#   num_classes: 512            # embedding dim, not number of classes
+# freq_out_dim: 512
+# dct_log_scale: true
+
 # VICReg alignment
 embed_dim: 4096             # expander size
 vicreg_weight: 0.1          # L_total = L_cls + lambda_vic * L_vicreg
@@ -74,6 +83,8 @@ resolution: 224   # resolution of output image to network
 # Dataset 
 train_dataset: ['FaceForensics++']
 test_dataset: ['FaceForensics++']
+# train_dataset: [Celeb-DF-v2]
+# test_dataset: [Celeb-DF-v2]
 compression: 'c23'
 train_batchSize: 32
 test_batchSize: 32
