@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet18
 from networks import BACKBONE
-from networks.sdnorm import SDNorm
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +28,7 @@ class SpectralResidualNorm(nn.Module):
         super().__init__()
         self.num_scales=num_scales
         self.eps = eps
+        self.num_mag_channels = 3
 
         self.envelope_filters = nn.ModuleList()
         for s in range(num_scales):
@@ -36,10 +36,11 @@ class SpectralResidualNorm(nn.Module):
             if kernel_size % 2 == 0:
                 kernel_size += 1
             conv = nn.Conv2d(
-                num_mag_channels, num_mag_channels,
+                self.num_mag_channels, 
+                self.num_mag_channels,
                 kernel_size=kernel_size,
                 padding=kernel_size // 2,
-                groups=num_mag_channels,  # depthwise
+                groups=self.num_mag_channels,  # depthwise
                 bias=False
             )
             # Initialize as Gaussian
@@ -49,7 +50,7 @@ class SpectralResidualNorm(nn.Module):
             gaussian = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
             gaussian = gaussian / gaussian.sum()
             with torch.no_grad():
-                for c in range(num_mag_channels):
+                for c in range(self.num_mag_channels):
                     conv.weight[c, 0] = gaussian
             self.envelope_filters.append(conv)
         
@@ -57,8 +58,8 @@ class SpectralResidualNorm(nn.Module):
         self.scale_weights = nn.Parameter(torch.ones(num_scales) / num_scales)
         
         # Per-scale learnable affine on residuals
-        self.gamma = nn.Parameter(torch.ones(1, num_mag_channels, 1, 1))
-        self.beta = nn.Parameter(torch.zeros(1, num_mag_channels, 1, 1))
+        self.gamma = nn.Parameter(torch.ones(1, self.num_mag_channels, 1, 1))
+        self.beta = nn.Parameter(torch.zeros(1, self.num_mag_channels, 1, 1))
         
         # Residual gate: how much raw mag to preserve
         self.gate_logit = nn.Parameter(torch.tensor(0.0))

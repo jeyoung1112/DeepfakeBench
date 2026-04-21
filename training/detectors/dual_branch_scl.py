@@ -68,12 +68,8 @@ class Expander(nn.Module):
 
 class SingleCenterLoss(nn.Module):
     """
-    From Li et al. (2021), "Frequency-aware Discriminative Feature 
+    Li et al. (2021), "Frequency-aware Discriminative Feature 
     Learning Supervised by Single-Center Loss for Face Forgery Detection"
-    
-    Compresses real-face representations around a learnable center.
-    Pushes fake-face representations away by a margin.
-    Does NOT constrain intra-class compactness of fakes.
     """
     def __init__(self, feat_dim, margin=0.3):
         super().__init__()

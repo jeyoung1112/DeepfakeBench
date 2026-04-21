@@ -1,8 +1,7 @@
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from scipy.fft import dctn
-from scipy.stats import gaussian_kde
+from scipy.stats import gaussian_kde, kurtosis
 import os
 import random
 from glob import glob
@@ -36,11 +35,9 @@ FF_ROOTS_FAKE = [
 ]
 
 N_SAMPLES   = 500
-SR_N_BINS   = 64
-_SR_CENTERS = (np.arange(SR_N_BINS) + 0.5) / SR_N_BINS   # normalised freq [0,1]
 TARGET_SIZE = (256, 256)
 RANDOM_SEED = 42
-OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "spectral_residual_analysis.png")
+OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "phase_distribution_analysis.png")
 
 # Real datasets: cool/neutral colours; Fake datasets: warm/vivid colours
 COLORS = {
@@ -81,89 +78,67 @@ def high_pass(gray):
     return gray - blurred
 
 
-
-def _spectral_residual_curve(mag, dist_norm, n=3):
-    """
-    Hou & Zhang (CVPR 2007) spectral residual, radially averaged.
-      R(f) = log|F| − h_n * log|F|   (h_n = n×n mean filter)
-    Returns _sr_curve: [SR_N_BINS] mean R per radial band.
-    Stored with _ prefix so the KDE loop skips it.
-    """
-    L = np.log(mag + 1e-8)
-    kernel = np.ones((n, n), dtype=np.float32) / (n * n)
-    R = L - cv2.filter2D(L, -1, kernel)
-    edges = np.linspace(0.0, 1.0, SR_N_BINS + 1)
-    curve = np.zeros(SR_N_BINS)
-    for i in range(SR_N_BINS):
-        mask = (dist_norm >= edges[i]) & (dist_norm < edges[i + 1])
-        if mask.any():
-            curve[i] = R[mask].mean()
-    return {"_sr_curve": curve}
-
-
-def _radial_log_envelope(mag, dist_norm, n_bins=64):
-    """Radially average log(1+mag) into n_bins bands; returns (centers, envelope)."""
-    log_mag = np.log1p(mag)
-    edges   = np.linspace(0.0, 1.0, n_bins + 1)
-    centers = 0.5 * (edges[:-1] + edges[1:])
-    envelope = np.zeros(n_bins)
-    for i in range(n_bins):
-        mask = (dist_norm >= edges[i]) & (dist_norm < edges[i + 1])
-        if mask.any():
-            envelope[i] = log_mag[mask].mean()
-    return centers, envelope
-
-
-def _log_envelope_stats(mag, dist_norm):
-    """
-    Fit a line to the radial log-spectrum in log-log space and return:
-      envelope_slope : spectral decay rate (steeper → more low-freq dominated)
-      envelope_resid : RMS deviation from the linear fit (higher → more irregular)
-    """
-    centers, envelope = _radial_log_envelope(mag, dist_norm)
-    valid   = centers > 0.02                     # skip near-DC bin
-    log_r   = np.log(centers[valid])
-    env_v   = envelope[valid]
-    slope, intercept = np.polyfit(log_r, env_v, 1)
-    resid   = float(np.sqrt(np.mean((env_v - (slope * log_r + intercept)) ** 2)))
-    return {"envelope_slope": float(slope), "envelope_resid": resid}
-
-
 def per_frame_stats(gray):
-    """Compute a dict of scalar statistics for one frame."""
-    spec     = np.fft.fftshift(np.fft.fft2(gray))
-    mag      = np.abs(spec)
+    """Compute phase-specific statistics for one frame."""
+    hp = high_pass(gray)
 
-    H, W  = mag.shape
+    # 2D FFT → shift DC to centre
+    spec  = np.fft.fftshift(np.fft.fft2(hp))
+    phase = np.angle(spec)          # ∈ [−π, π]
+
+    H, W   = phase.shape
     cy, cx = H // 2, W // 2
-    dist   = np.sqrt(
-        (np.arange(H)[:, None] - cy) ** 2 +
-        (np.arange(W)[None, :] - cx) ** 2
-    )
-    dist_norm = dist / (dist.max() + 1e-12)
+    r_max  = min(cy, cx)
 
-    # ── Overall high-pass FFT energy ───────────────────────────────────────
-    hp       = high_pass(gray)
-    spec_hp  = np.fft.fftshift(np.fft.fft2(hp))
-    mag2_hp  = np.abs(spec_hp) ** 2
-    total_energy = mag2_hp.sum()
+    Y, X    = np.ogrid[:H, :W]
+    R       = np.sqrt((Y - cy) ** 2 + (X - cx) ** 2)
+    lf_mask = R <= 0.20 * r_max    # inner 20 % of Nyquist radius
+    hf_mask = R >  0.20 * r_max    # outer 80 %
 
-    r_max = min(cy, cx)
-    R     = dist                                 # already computed
-    high_mask   = R > 0.20 * r_max
-    hf_ratio    = mag2_hp[high_mask].sum() / (total_energy + 1e-12)
+    # 1. Phase entropy  (histogram over [−π, π], 64 bins)
+    #    Uniform phase → max entropy; structured phase → lower entropy.
+    #    GANs tend to push phase toward uniformity in HF regions.
+    hist, _ = np.histogram(phase.ravel(), bins=64, range=(-np.pi, np.pi))
+    hist    = hist / (hist.sum() + 1e-12)
+    hist    = hist[hist > 0]
+    phase_entropy = -np.sum(hist * np.log(hist))
 
-    # ── Log-spectrum envelope ───────────────────────────────────────────────
-    env_stats = _log_envelope_stats(mag, dist_norm)
+    # 2 & 3. Phase std in LF / HF bands
+    phase_lf_std = phase[lf_mask].std()
+    phase_hf_std = phase[hf_mask].std()
 
-    # ── Spectral residual curve (Hou & Zhang 2007) ─────────────────────────
-    sr_stats = _spectral_residual_curve(mag, dist_norm)
+    # 4. HF/LF phase std ratio — captures relative phase disorder between bands.
+    #    Deepfakes often show disproportionately high HF phase noise.
+    phase_hf_lf_ratio = phase_hf_std / (phase_lf_std + 1e-12)
+
+    # 5. Global phase gradient mean  (measures smoothness of the phase landscape)
+    #    Abrupt phase transitions are a hallmark of GAN blending artefacts.
+    gy, gx   = np.gradient(phase)
+    grad_mag = np.sqrt(gx ** 2 + gy ** 2)
+    phase_grad_mean = grad_mag.mean()
+
+    # 6. Phase gradient restricted to the high-frequency region
+    phase_grad_hf_mean = grad_mag[hf_mask].mean()
+
+    # 7. Phase coherence — circular mean resultant length |mean(e^{iφ})|
+    #    → 1: all phases perfectly aligned; 0: uniformly random (incoherent).
+    #    Real textures tend to be more incoherent; GAN outputs can be more
+    #    structured or more chaotic depending on the method.
+    phase_coherence = float(np.abs(np.exp(1j * phase).mean()))
+
+    # 8. Excess kurtosis of the phase distribution
+    #    Measures peakedness / heavy-tailedness relative to a Gaussian.
+    phase_kurtosis = float(kurtosis(phase.ravel(), fisher=True))
 
     return {
-        "fft_log_energy": np.log1p(total_energy),
-        "fft_hf_ratio":   hf_ratio,
-        **env_stats,
-        **sr_stats,   # _sr_curve — skipped by KDE loop, plotted separately
+        "phase_entropy":      phase_entropy,
+        "phase_lf_std":       phase_lf_std,
+        "phase_hf_std":       phase_hf_std,
+        "phase_hf_lf_ratio":  phase_hf_lf_ratio,
+        "phase_grad_mean":    phase_grad_mean,
+        "phase_grad_hf_mean": phase_grad_hf_mean,
+        "phase_coherence":    phase_coherence,
+        "phase_kurtosis":     phase_kurtosis,
     }
 
 
@@ -212,21 +187,23 @@ data = {
 
 # ── Plotting ───────────────────────────────────────────────────────────────────
 STAT_META = {
-    "fft_log_energy": ("FFT Log Energy (high-pass)\nlog(1 + Σ|F|²)",  "Log Energy (au)"),
-    "fft_hf_ratio":   ("FFT High-Freq Ratio\n(r > 20% Nyquist)",       "Fraction of Total Energy"),
-    "envelope_slope": ("Log-Spectrum Envelope Slope\n(log|F| vs log r, linear fit)", "Slope"),
-    "envelope_resid": ("Log-Spectrum Envelope Residual\n(RMS deviation from linear envelope)", "RMS Residual"),
+    "phase_entropy":      ("Phase Entropy\n(−Σ p·log p over [−π, π])",             "Nats"),
+    "phase_lf_std":       ("Phase Std — Low Freq\n(r ≤ 20% Nyquist)",              "Radians"),
+    "phase_hf_std":       ("Phase Std — High Freq\n(r > 20% Nyquist)",             "Radians"),
+    "phase_hf_lf_ratio":  ("Phase HF/LF Std Ratio\n(relative band disorder)",      "Ratio"),
+    "phase_grad_mean":    ("Phase Gradient Mean\n(global phase smoothness)",        "rad / pixel"),
+    "phase_grad_hf_mean": ("Phase Gradient HF Mean\n(HF-only phase smoothness)",   "rad / pixel"),
+    "phase_coherence":    ("Phase Coherence\n|mean(e^{iφ})| — circular mean",      "0 – 1"),
+    "phase_kurtosis":     ("Phase Kurtosis\n(peakedness vs Gaussian baseline)",     "Excess kurtosis"),
 }
 
-stat_keys = [k for k in stat_keys if not k.startswith("_")]   # drop array fields
-n_stats  = len(stat_keys)
-n_panels = n_stats + 1                                         # +1 for SR curve
-n_cols   = 2
-n_rows   = (n_panels + n_cols - 1) // n_cols
+n_stats = len(stat_keys)
+n_cols  = 4
+n_rows  = (n_stats + n_cols - 1) // n_cols
 
 fig, axes = plt.subplots(n_rows, n_cols, figsize=(22, 5 * n_rows))
 fig.patch.set_facecolor("#0d0d0d")
-axes = np.array(axes).flatten()
+axes = axes.flatten()
 
 KDE_POINTS = 512
 
@@ -243,10 +220,12 @@ for ax_idx, key in enumerate(stat_keys):
     for name, color in COLORS.items():
         vals = data[name][key]
         ls   = LINESTYLES[name]
+        # KDE curve
         kde  = gaussian_kde(vals, bw_method="scott")
         ys   = kde(xs)
         ax.plot(xs, ys, color=color, lw=2.0, ls=ls, label=name)
         ax.fill_between(xs, ys, alpha=0.10, color=color)
+        # Vertical mean line
         ax.axvline(vals.mean(), color=color, lw=1.0, ls=ls, alpha=0.7)
 
     ax.set_title(title, color="white", fontsize=10, pad=8)
@@ -257,31 +236,10 @@ for ax_idx, key in enumerate(stat_keys):
         spine.set_edgecolor("#444444")
     ax.yaxis.label.set_color("gray")
 
-# ── Spectral residual mean curve (Hou & Zhang 2007) ──────────────────────────
-ax_sr = axes[n_stats]
-ax_sr.set_facecolor("#1a1a1a")
-ax_sr.axhline(0, color="#555555", lw=0.8)
-for name, color in COLORS.items():
-    curves = data[name]["_sr_curve"]   # (n_frames, SR_N_BINS)
-    mean   = curves.mean(axis=0)
-    std    = curves.std(axis=0)
-    ls     = LINESTYLES[name]
-    ax_sr.plot(_SR_CENTERS, mean, color=color, lw=2.0, ls=ls, label=name)
-    ax_sr.fill_between(_SR_CENTERS, mean - std, mean + std, color=color, alpha=0.10)
-ax_sr.set_title(
-    "Spectral Residual Curve  [Hou & Zhang 2007]\n"
-    "mean R(f) ± std,  R = log|F| − h₃∗log|F|",
-    color="white", fontsize=10, pad=8,
-)
-ax_sr.set_xlabel("Normalised Frequency (0 = DC, 1 = Nyquist)", color="gray", fontsize=8)
-ax_sr.set_ylabel("Mean Residual", color="gray", fontsize=8)
-ax_sr.tick_params(colors="gray", labelsize=7)
-for spine in ax_sr.spines.values():
-    spine.set_edgecolor("#444444")
-
 # Shared legend – add linestyle hint entries
-import matplotlib.lines as mlines
 handles, labels = axes[0].get_legend_handles_labels()
+
+import matplotlib.lines as mlines
 real_patch = mlines.Line2D([], [], color="white", lw=1.5, ls="-",  label="── Real")
 fake_patch = mlines.Line2D([], [], color="white", lw=1.5, ls="--", label="-- Fake")
 handles = [real_patch, fake_patch] + handles
@@ -295,11 +253,11 @@ fig.legend(handles, labels,
            bbox_to_anchor=(0.5, 1.02))
 
 # Hide unused axes
-for ax in axes[n_panels:]:
+for ax in axes[n_stats:]:
     ax.set_visible(False)
 
 fig.suptitle(
-    "Real vs Fake Frequency Statistics — Overlapping Distributions\n"
+    "Real vs Fake — Phase-Specific Distribution Analysis\n"
     "Solid = Real  ·  Dashed = Fake",
     color="white", fontsize=14, fontweight="bold", y=1.06,
 )
