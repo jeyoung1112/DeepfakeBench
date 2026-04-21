@@ -7,9 +7,8 @@ from networks import BACKBONE
 logger = logging.getLogger(__name__)
 
 class FFTTransform(nn.Module):
-    def __init__(self, log_scale=True, center=True):
+    def __init__(self, center=True):
         super().__init__()
-        self.log_scale = log_scale
         self.center = center
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -18,8 +17,6 @@ class FFTTransform(nn.Module):
             fft_transformed = torch.fft.fftshift(fft_transformed, dim=(-2, -1))
         magnitude = fft_transformed.abs()
         phase = fft_transformed.angle()
-        if self.log_scale:
-            magnitude = torch.log1p(magnitude)
         phase = phase / torch.pi
         return torch.cat([magnitude, phase], dim=1)
 
@@ -70,8 +67,8 @@ class SpectralResidualNorm(nn.Module):
         phase = fft_coeffs[:, mc:]   # [B, 3, H, W]
         
         # Step 1: Log-magnitude spectrum
-        log_mag = torch.log1p(mag)   # log(1 + |F|), already done in FFTTransform
-        # If FFTTransform already applies log1p, use mag directly as log_mag
+        log_mag = torch.log1p(mag)
+
         
         # Step 2: Multi-scale smooth envelope estimation
         scale_w = torch.softmax(self.scale_weights, dim=0)
@@ -92,6 +89,40 @@ class SpectralResidualNorm(nn.Module):
         
         # Concatenate with phase (untouched)
         return torch.cat([mag_out, phase], dim=1)  # [B, 6, H, W]
+
+class OriginalSpectralResidualNorm(nn.Module):
+    """
+    Hou & Zhang 2007 spectral residual, adapted to match SpectralResidualNorm interface.
+    Input fft_coeffs: [B, 2C, H, W] — first C channels are magnitude, last C are phase.
+    Output: [B, 2C, H, W] — spectral residual replacing magnitude, phase unchanged.
+    """
+    def __init__(self, envelope_kernel=26):
+        super().__init__()
+        self.envelope_kernel = envelope_kernel
+        self.num_mag_channels = 3
+
+        # Fixed box filter h_n(f): 1/n^2 averages log-amplitude spectrum
+        box = torch.ones(1, 1, envelope_kernel, envelope_kernel) / (envelope_kernel ** 2)
+        self.register_buffer('box', box)
+
+    def forward(self, fft_coeffs):
+        mc = self.num_mag_channels
+        mag = fft_coeffs[:, :mc]    # [B, C, H, W]
+        phase = fft_coeffs[:, mc:]  # [B, C, H, W]
+
+        B, C, H, W = mag.shape
+
+        # Log spectrum (Eq 7)
+        L = torch.log1p(mag)
+
+        # Smooth envelope via box filter, then residual R = L - A_hat (Eq 3/8)
+        L_flat = L.view(B * C, 1, H, W)
+        pad = self.envelope_kernel // 2
+        A_hat = torch.nn.functional.conv2d(L_flat, self.box, padding=pad)
+        A_hat = A_hat[:, :, :H, :W]
+        R = (L_flat - A_hat).view(B, C, H, W)
+
+        return torch.cat([R, phase], dim=1)
     
 
 class FrequencyBranch(nn.Module):
@@ -100,12 +131,19 @@ class FrequencyBranch(nn.Module):
         backbone_name = config.get('freq_backbone', 'resnet18')
         out_dim = config.get('freq_out_dim', 512)
         img_size = config.get('resolution', 224)
+        spec_residual_type = config.get('sr_type', 'original')
         self.out_dim = out_dim
-        self.fft = FFTTransform(log_scale=config.get('fft_log_scale', True), center=True)
+        self.fft = FFTTransform(center=True)
         self.encoder = self.build_backbone(config)
-        self.spec_residual = SpectralResidualNorm(
-            envelope_kernel=config.get('envelope_kernel', 21),
-            num_scales=config.get('num_envelope_scales', 3))
+        if spec_residual_type == "original":
+            self.spec_residual = OriginalSpectralResidualNorm(
+                envelope_kernel=config.get('envelope_kernel', 21)
+                )
+        else:
+            self.spec_residual = SpectralResidualNorm(
+                envelope_kernel=config.get('envelope_kernel', 21),
+                num_scales=config.get('num_envelope_scales', 3)
+                )
         self.norm = nn.LayerNorm(self.out_dim)
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         logger.info(f"FrequencyBranch-FFT ({backbone_name}): {trainable:,} params")

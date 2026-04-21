@@ -21,11 +21,11 @@ freq_backbone_config:
 freq_out_dim: 512
 
 # Spectral Residual Parameters
-sr_type: original #original = paper style, modified=mine
+# sr_type: original #original = paper style, modified=mine
+# envelope_kernel: 26
+sr_type: mine #original = paper style, modified=mine
+num_envelope_scales: 1
 envelope_kernel: 21
-# sr_type: mine #original = paper style, modified=mine
-# num_envelope_scales: 1
-# envelope_kernel: 21
 
 # Single Center Loss Paramters
 scl_margin: 0.3

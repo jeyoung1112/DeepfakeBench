@@ -152,7 +152,7 @@ class DualBranchSCLDetector(AbstractDetector):
             )
             self.vicreg_weight = config.get('vicreg_weight', 0.1)
 
-        self._log_params()
+        self._log_params(config)
 
     def build_backbone(self, config):
         pixel_branch = None
@@ -170,7 +170,7 @@ class DualBranchSCLDetector(AbstractDetector):
         cls_loss_class = LOSSFUNC[config.get('loss_func', 'cross_entropy')]
         return cls_loss_class()
 
-    def _log_params(self):
+    def _log_params(self, config):
         total, trainable = 0, 0
         components = {
             'pixel_branch': self.pixel_branch,
@@ -192,7 +192,11 @@ class DualBranchSCLDetector(AbstractDetector):
             sr_params = sum(p.numel() for p in sr.parameters())
             sr_train = sum(p.numel() for p in sr.parameters() 
                            if p.requires_grad)
-            gate_val = torch.sigmoid(sr.gate_logit).item()
+            sr_type = config.get("sr_type")
+            if sr_type == "mine":
+                gate_val = torch.sigmoid(sr.gate_logit).item()
+            else:
+                gate_val = 0
             logger.info(
                 f"  spec_residual: {sr_train:,} trainable / "
                 f"{sr_params:,} total (gate={gate_val:.3f})"
@@ -289,12 +293,13 @@ class DualBranchSCLDetector(AbstractDetector):
         if (self.freq_branch is not None 
                 and hasattr(self.freq_branch, 'spec_residual')):
             sr = self.freq_branch.spec_residual
-            gate = torch.sigmoid(sr.gate_logit).item()
-            metrics['specres_gate'] = gate
+            if hasattr(sr, 'gate_logit'):
+                metrics['specres_gate'] = torch.sigmoid(sr.gate_logit).item()
             # Envelope filter norms per scale
-            for s, filt in enumerate(sr.envelope_filters):
-                metrics[f'specres_env_norm_s{s}'] = \
-                    filt.weight.norm().item()
+            if hasattr(sr, 'envelope_filters'):
+                for s, filt in enumerate(sr.envelope_filters):
+                    metrics[f'specres_env_norm_s{s}'] = \
+                        filt.weight.norm().item()
 
         return metrics
 
