@@ -53,3 +53,27 @@ class VICRegLoss(nn.Module):
         }
  
         return total_loss, loss_dict
+
+
+@LOSSFUNC.register_module(module_name='varcov')
+class VarCovRegLoss(nn.Module):
+    """Variance + covariance regularization"""
+
+    def __init__(self, gamma=1.0, eps=1e-4):
+        super().__init__()
+        self.gamma = gamma
+        self.eps = eps
+
+    def variance(self, z):
+        std = torch.sqrt(z.var(dim=0) + self.eps)
+        return torch.mean(F.relu(self.gamma - std))
+
+    def covariance(self, z):
+        n, d = z.shape
+        z_centered = z - z.mean(dim=0)
+        cov = (z_centered.T @ z_centered) / (n - 1)
+        cov.fill_diagonal_(0)
+        return cov.pow(2).sum() / d
+
+    def forward(self, z):
+        return self.variance(z), self.covariance(z)

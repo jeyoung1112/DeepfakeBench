@@ -18,34 +18,49 @@ class PixelBranch(nn.Module):
         super().__init__()
 
         model_name = config.get("clip_model_name", "openai/clip-vit-large-patch14")
-        lora_rank = config.get('lora_rank', 8)
-        lora_alpha = config.get('lora_alpha', 16)
-        lora_dropout = config.get('lora_dropout', 0.1)
-        lora_targets = config.get('lora_targets', ['q_proj', 'v_proj'])
-
+        freeze_clip = config.get("freeze_clip", False)
+        
         clip_model = CLIPVisionModel.from_pretrained(model_name)
         vision = clip_model.vision_model
         self.processor = CLIPImageProcessor.from_pretrained(model_name)
         self.out_dim = self.VARIANTS[model_name]
 
-        lora_config = LoraConfig(
-            r=lora_rank,
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-            target_modules=lora_targets,
-            bias="none",
-        )
-        self.encoder = get_peft_model(vision, lora_config)
-
-        for name, param in self.encoder.named_parameters():
-            if "lora_" not in name:
+        if freeze_clip:
+            self.encoder = vision
+            for param in self.encoder.parameters():
                 param.requires_grad = False
+            self._freeze_encoder = True
+        else:
+            self._freeze_encoder = False
+            lora_rank = config.get('lora_rank', 8)
+            lora_alpha = config.get('lora_alpha', 16)
+            lora_dropout = config.get('lora_dropout', 0.1)
+            lora_targets = config.get('lora_targets', ['q_proj', 'v_proj'])
+
+            lora_config = LoraConfig(
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                target_modules=lora_targets,
+                bias="none",
+            )
+            self.encoder = get_peft_model(vision, lora_config)
+
+            for name, param in self.encoder.named_parameters():
+                if "lora_" not in name:
+                    param.requires_grad = False
 
         self.norm = nn.LayerNorm(self.out_dim)
         
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())
         logger.info(f"PixelBranch: {trainable:,} trainable / {total:,} total params")
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self._freeze_encoder:
+            self.encoder.eval()
+        return self
 
     def forward(self, x):
         outputs = self.encoder(pixel_values=x)

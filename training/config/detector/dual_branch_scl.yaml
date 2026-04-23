@@ -3,6 +3,7 @@ mode: dual
 
 # Pixel Branch
 clip_model_name: openai/clip-vit-large-patch14
+freeze_clip: false
 lora_rank: 8
 lora_alpha: 16
 lora_dropout: 0.1
@@ -20,25 +21,15 @@ freq_backbone_config:
   num_classes: 512
 freq_out_dim: 512
 
-# Spectral Residual Parameters
-sr_type: original #original = paper style, modified=mine
-envelope_kernel: 21
-# sr_type: mine #original = paper style, modified=mine
-# num_envelope_scales: 1
-# envelope_kernel: 21
-
 # Single Center Loss Paramters
-scl_margin: 0.3
-scl_weight: 0.5
-scl_warmup_epochs: 0
+scl_weight: 0.1
+scl_ema_tau: 0.99
 
-# VICReg
-use_vicreg: false
-embed_dim: 4096
-vicreg_weight: 0.1
-lambda_inv: 25.0
-mu_var: 25.0
-nu_cov: 1.0
+# var_weight: 0.04
+# cov_weight: 1.0
+var_weight: 0
+cov_weight: 0
+
 
 # --- Loss ---
 loss_func: cross_entropy
@@ -53,8 +44,6 @@ optimizer:
     eps: 0.00000001  # epsilon for Adam optimizer
     weight_decay: 0.0005  # weight decay for regularization
     amsgrad: false
-
-lr_scheduler: null
 
 lr_scheduler: null   # learning rate scheduler
 nEpochs: 10   # number of epochs to train for

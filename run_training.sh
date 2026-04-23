@@ -3,7 +3,8 @@
 set -e
 
 for detector in \
-     "./training/config/detector/sbi.yaml" 
+    "./training/config/detector/dual_branch_scl.yaml" 
+    
 do
     echo "=========================================="
     echo "Running detector: $detector"

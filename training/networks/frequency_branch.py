@@ -1,6 +1,7 @@
 import logging
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.models import resnet18
 from networks import BACKBONE
 from networks.sdnorm import SDNorm
@@ -24,29 +25,39 @@ class FFTTransform(nn.Module):
         phase = phase / torch.pi
         return torch.cat([magnitude, phase], dim=1)
 
+class OriginalSpectralResidualNorm(nn.Module):
+    def __init__(self, envelope_kernel=21):
+        super().__init__()
+        # Uniform box filter, n x n, sums to 1
+        kernel = torch.ones(3, 1, envelope_kernel, envelope_kernel) / (envelope_kernel * envelope_kernel)
+        self.register_buffer('kernel', kernel)
+        self.padding = envelope_kernel // 2
+
+    def forward(self, fft_coeffs):
+        mag = fft_coeffs[:, :3]
+        phase = fft_coeffs[:, 3:]
+        log_mag = torch.log1p(mag)
+        envelope = F.conv2d(log_mag, self.kernel, padding=self.padding, groups=3)
+        residual = log_mag - envelope
+        return torch.cat([residual, phase], dim=1)
+
+
 class FrequencyBranch(nn.Module):
     def __init__(self, config):
         super().__init__()
         backbone_name = config.get('freq_backbone', 'resnet18')
         out_dim = config.get('freq_out_dim', 512)
         img_size = config.get('resolution', 224)
+        spec_residual_type = config.get('sr_type')
         self.out_dim = out_dim
         self.fft = FFTTransform(log_scale=config.get('fft_log_scale', True), center=True)
         self.encoder = self.build_backbone(config)
+        self.spec_residual = None
+        if spec_residual_type == "original":
+            self.spec_residual = OriginalSpectralResidualNorm(
+                envelope_kernel=config.get('envelope_kernel', 21)
+                )
 
-        self.use_sdnorm = config.get('use_sdnorm', True)
-        if self.use_sdnorm:
-            sc = config.get('sdnorm_config', {})
-            self.sdnorm = SDNorm(
-                size=img_size,
-                num_rings=sc.get('num_rings', 4),
-                num_mag_channels=3,
-                eps=sc.get('eps', 1e-5), 
-                learnable_affine=sc.get('learnable_affine', True),
-                sharpness=sc.get('sharpness', 5.0),
-            )
-        else:
-            self.sdnorm = None
         self.norm = nn.LayerNorm(out_dim)
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         logger.info(f"FrequencyBranch-FFT ({backbone_name}): {trainable:,} params")
@@ -67,8 +78,8 @@ class FrequencyBranch(nn.Module):
 
     def forward(self, x):
         x = self.fft(x)
-        if self.sdnorm is not None:
-            x = self.sdnorm(x)
+        if self.spec_residual is not None:
+            x = self.spec_residual(x)
         y_freq = self.encoder(x)
         y_freq = self.norm(y_freq)
         return y_freq

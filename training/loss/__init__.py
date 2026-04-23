@@ -23,3 +23,5 @@ from .patch_consistency_loss import PatchConsistencyLoss
 from .region_independent_loss import RegionIndependentLoss
 from .supercontrast_loss import SupConLoss
 from .vicreg_loss import VICRegLoss
+from .vicreg_loss import VarCovRegLoss
+from .single_center_loss import SingleCenterLoss
