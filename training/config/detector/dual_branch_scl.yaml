@@ -25,11 +25,9 @@ freq_out_dim: 512
 scl_weight: 0.1
 scl_ema_tau: 0.99
 
-# var_weight: 0.04
-# cov_weight: 1.0
+varcov_real_only: false
 var_weight: 0
 cov_weight: 0
-
 
 # --- Loss ---
 loss_func: cross_entropy

@@ -1,0 +1,107 @@
+# Xception + Label-Preserving Spectral Nuisance Decorrelation (LPSND)
+# Replace the detector file with xception_lpsnd.py and register/import it in your detectors package.
+
+log_dir: /data/home/zhiyuanyan/logs/testing_bench
+
+pretrained: /media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/xception-b5690688.pth
+model_name: xception_lpsnd
+backbone_name: xception
+
+# ── LPSND regularizer ────────────────────────────────────────
+# Recommended first run: cross_cov with lambda 0.01.
+# Then try hsic with linear F kernel + RBF spectral-nuisance kernel.
+loss_mode: csica                 # cross_cov | hsic | csica
+lambda_decorr: 0.1             # try 0.001, 0.01, 0.05, 0.1 in ablations
+
+# HSIC kernels. Recommended: linear on projected Xception feature, RBF on residual spectrum.
+hsic_kernel_f: linear           # linear | rbf
+hsic_kernel_s: rbf              # linear | rbf
+hsic_sigma_f: -1.0              # only used if hsic_kernel_f: rbf; -1 = median heuristic
+hsic_sigma_s: -1.0              # -1 = median heuristic
+
+# Equal class weighting corresponds to 1/2 * [D(real) + D(fake)].
+class_weighting: equal          # equal | proportional
+min_class_samples: 4
+
+# Projection head applied after Xception feature extraction for the regularizer only.
+# lpsnd_use_projection_head: true
+lpsnd_use_projection_head: false
+lpsnd_feature_dim: 2048         # pooled Xception feature dim; adjust if your backbone differs
+lpsnd_proj_dim: 128
+
+# Fixed train-set spectral statistics for label-preserving nuisance projection.
+# Run precompute_lpsnd_stats.py first and point this path to its .npz output.
+lpsnd_stats_path: /home/jeyoung/personal/DeepfakeBench/training/ffpp_c23_train_lpsnd_stats.npz
+lpsnd_require_stats: true       # keep true for final experiments
+lpsnd_batch_fallback: false     # debug only; not recommended for final results
+lpsnd_gamma: -1.0               # -1 => auto: 1e-3 * trace(Sigma_W) / 11
+lpsnd_eps: 0.000001
+lpsnd_num_stats: 11
+spectral_input_is_normalized: true
+# ──────────────────────────────────────────────────────────────
+
+backbone_config:
+  dropout: 0.5
+  num_classes: 2
+  inc: 3
+  mode: original
+
+all_dataset: [FaceForensics++, FF-F2F, FF-DF, FF-FS, FF-NT, FaceShifter, DeepFakeDetection, Celeb-DF-v1, Celeb-DF-v2, DFDCP, DFDC, DeeperForensics-1.0, UADFV]
+train_dataset: [FaceForensics++]
+test_dataset: [FaceForensics++]
+save_ckpt: true
+save_feat: false
+
+compression: c23
+train_batchSize: 32
+test_batchSize: 32
+workers: 8
+frame_num: {'train': 32, 'test': 32}
+resolution: 256
+balance_data: false
+with_mask: false
+with_landmark: false
+
+use_data_augmentation: true
+data_aug:
+  flip_prob: 0.5
+  rotate_prob: 0.5
+  rotate_limit: [-10, 10]
+  blur_prob: 0.5
+  blur_limit: [3, 7]
+  brightness_prob: 0.5
+  brightness_limit: [-0.1, 0.1]
+  contrast_limit: [-0.1, 0.1]
+  quality_lower: 40
+  quality_upper: 100
+
+mean: [0.5, 0.5, 0.5]
+std: [0.5, 0.5, 0.5]
+
+optimizer:
+  type: adam
+  adam:
+    lr: 0.0002
+    beta1: 0.9
+    beta2: 0.999
+    eps: 0.00000001
+    weight_decay: 0.0005
+    amsgrad: false
+  sgd:
+    lr: 0.0002
+    momentum: 0.9
+    weight_decay: 0.0005
+
+lr_scheduler: null
+nEpochs: 10
+start_epoch: 0
+save_epoch: 1
+rec_iter: 100
+logdir: ./logs
+manualSeed: 1024
+
+loss_func: cross_entropy
+losstype: null
+metric_scoring: auc
+cuda: true
+cudnn: true

@@ -211,6 +211,9 @@ data = {
 }
 
 # ── Plotting ───────────────────────────────────────────────────────────────────
+import matplotlib.lines as mlines
+from matplotlib.gridspec import GridSpec
+
 STAT_META = {
     "fft_log_energy": ("FFT Log Energy (high-pass)\nlog(1 + Σ|F|²)",  "Log Energy (au)"),
     "fft_hf_ratio":   ("FFT High-Freq Ratio\n(r > 20% Nyquist)",       "Fraction of Total Energy"),
@@ -219,21 +222,34 @@ STAT_META = {
 }
 
 stat_keys = [k for k in stat_keys if not k.startswith("_")]   # drop array fields
-n_stats  = len(stat_keys)
-n_panels = n_stats + 1                                         # +1 for SR curve
-n_cols   = 2
-n_rows   = (n_panels + n_cols - 1) // n_cols
 
-fig, axes = plt.subplots(n_rows, n_cols, figsize=(22, 5 * n_rows))
+dataset_names = list(COLORS.keys())   # 7 datasets
+n_sr          = len(dataset_names)    # 7
+
+# Layout: 4 KDE plots (2×2) on top, 7 SR-per-dataset (2×4) on bottom
+SR_COLS = 4
+SR_ROWS = (n_sr + SR_COLS - 1) // SR_COLS   # 2
+
+fig = plt.figure(figsize=(26, 5 * (2 + SR_ROWS)))
 fig.patch.set_facecolor("#0d0d0d")
-axes = np.array(axes).flatten()
+
+gs = GridSpec(2 + SR_ROWS, 4, figure=fig, hspace=0.55, wspace=0.35)
+
+# KDE axes — top 2 rows, left 2 columns each
+kde_positions = [(0, 0), (0, 2), (1, 0), (1, 2)]
+kde_axes = [fig.add_subplot(gs[r, c:c+2]) for r, c in kde_positions]
+
+# SR axes — bottom SR_ROWS rows, 4 columns
+sr_axes = []
+for i in range(n_sr):
+    r = 2 + i // SR_COLS
+    c = i % SR_COLS
+    sr_axes.append(fig.add_subplot(gs[r, c]))
 
 KDE_POINTS = 512
 
-for ax_idx, key in enumerate(stat_keys):
-    ax = axes[ax_idx]
+for ax, key in zip(kde_axes, stat_keys):
     ax.set_facecolor("#1a1a1a")
-
     title, xlabel = STAT_META[key]
     x_min = min(data[name][key].min() for name in data)
     x_max = max(data[name][key].max() for name in data)
@@ -255,33 +271,39 @@ for ax_idx, key in enumerate(stat_keys):
     ax.tick_params(colors="gray", labelsize=7)
     for spine in ax.spines.values():
         spine.set_edgecolor("#444444")
-    ax.yaxis.label.set_color("gray")
 
-# ── Spectral residual mean curve (Hou & Zhang 2007) ──────────────────────────
-ax_sr = axes[n_stats]
-ax_sr.set_facecolor("#1a1a1a")
-ax_sr.axhline(0, color="#555555", lw=0.8)
-for name, color in COLORS.items():
-    curves = data[name]["_sr_curve"]   # (n_frames, SR_N_BINS)
-    mean   = curves.mean(axis=0)
-    std    = curves.std(axis=0)
-    ls     = LINESTYLES[name]
-    ax_sr.plot(_SR_CENTERS, mean, color=color, lw=2.0, ls=ls, label=name)
-    ax_sr.fill_between(_SR_CENTERS, mean - std, mean + std, color=color, alpha=0.10)
-ax_sr.set_title(
-    "Spectral Residual Curve  [Hou & Zhang 2007]\n"
-    "mean R(f) ± std,  R = log|F| − h₃∗log|F|",
-    color="white", fontsize=10, pad=8,
-)
-ax_sr.set_xlabel("Normalised Frequency (0 = DC, 1 = Nyquist)", color="gray", fontsize=8)
-ax_sr.set_ylabel("Mean Residual", color="gray", fontsize=8)
-ax_sr.tick_params(colors="gray", labelsize=7)
-for spine in ax_sr.spines.values():
-    spine.set_edgecolor("#444444")
+# ── Spectral residual curve — one subplot per dataset ────────────────────────
+# Shared y-axis range across all SR subplots for easy comparison
+all_means = [data[n]["_sr_curve"].mean(axis=0) for n in dataset_names]
+all_stds  = [data[n]["_sr_curve"].std(axis=0)  for n in dataset_names]
+y_min = min((m - s).min() for m, s in zip(all_means, all_stds))
+y_max = max((m + s).max() for m, s in zip(all_means, all_stds))
+y_pad = (y_max - y_min) * 0.10
 
-# Shared legend – add linestyle hint entries
-import matplotlib.lines as mlines
-handles, labels = axes[0].get_legend_handles_labels()
+for ax, name, mean, std in zip(sr_axes, dataset_names, all_means, all_stds):
+    color = COLORS[name]
+    ls    = LINESTYLES[name]
+    ax.set_facecolor("#1a1a1a")
+    ax.axhline(0, color="#555555", lw=0.8)
+    ax.plot(_SR_CENTERS, mean, color=color, lw=2.0, ls=ls)
+    ax.fill_between(_SR_CENTERS, mean - std, mean + std, color=color, alpha=0.20)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+    ax.set_title(name, color=color, fontsize=9, pad=6, fontweight="bold")
+    ax.set_xlabel("Norm. Freq.", color="gray", fontsize=7)
+    ax.set_ylabel("Mean R(f)", color="gray", fontsize=7)
+    ax.tick_params(colors="gray", labelsize=6)
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#444444")
+
+# Section label above SR rows
+fig.text(0.5, (SR_ROWS * 5) / (5 * (2 + SR_ROWS)) + 0.005,
+         "Spectral Residual Curve per Dataset  [Hou & Zhang 2007]  "
+         "R(f) = log|F| − h₃∗log|F|,  mean ± std",
+         ha="center", va="bottom", color="white", fontsize=10,
+         transform=fig.transFigure)
+
+# Shared legend
+handles, labels = kde_axes[0].get_legend_handles_labels()
 real_patch = mlines.Line2D([], [], color="white", lw=1.5, ls="-",  label="── Real")
 fake_patch = mlines.Line2D([], [], color="white", lw=1.5, ls="--", label="-- Fake")
 handles = [real_patch, fake_patch] + handles
@@ -294,17 +316,12 @@ fig.legend(handles, labels,
            fontsize=9, labelcolor="white",
            bbox_to_anchor=(0.5, 1.02))
 
-# Hide unused axes
-for ax in axes[n_panels:]:
-    ax.set_visible(False)
-
 fig.suptitle(
     "Real vs Fake Frequency Statistics — Overlapping Distributions\n"
     "Solid = Real  ·  Dashed = Fake",
-    color="white", fontsize=14, fontweight="bold", y=1.06,
+    color="white", fontsize=14, fontweight="bold", y=1.05,
 )
 
-plt.tight_layout(rect=[0, 0, 1, 1])
 plt.savefig(OUTPUT_PATH, dpi=150, bbox_inches="tight",
             facecolor=fig.get_facecolor())
 plt.close()

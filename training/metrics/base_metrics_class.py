@@ -22,10 +22,10 @@ def get_prediction(output, label):
 
 
 def calculate_metrics_for_train(label, output):
-    if output.size(1) == 2:
+    if output.size(1) >= 2:
         prob = torch.softmax(output, dim=1)[:, 1]
     else:
-        prob = output
+        prob = output.squeeze(1)
 
     # Accuracy
     _, prediction = torch.max(output, 1)
@@ -72,10 +72,10 @@ class Metrics_batch():
 
     def update(self, label, output):
         acc = self._update_acc(label, output)
-        if output.size(1) == 2:
+        if output.size(1) >= 2:
             prob = torch.softmax(output, dim=1)[:, 1]
         else:
-            prob = output
+            prob = output.squeeze(1)
         #label = 1-label
         #prob = torch.softmax(output, dim=1)[:, 1]
         auc, eer = self._update_auc(label, prob)

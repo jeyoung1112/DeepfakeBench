@@ -103,7 +103,7 @@ def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold
     print(f"Actual  Real  [{tn:>6} {fp:>6}]")
     print(f"        Fake  [{fn:>6} {tp:>6}]")
     print(f"\n  TN={tn}  FP={fp}  FN={fn}  TP={tp}")
-    accuracy = (tp + fp) / (tp + fp + tn + fn) if (tp + fp + tn + fn) > 0 else 0.0
+    accuracy = (tp + tn) / (tp + fp + tn + fn) if (tp + fp + tn + fn) > 0 else 0.0
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
@@ -130,8 +130,6 @@ def compute_and_display_confusion_matrix(y_pred, y_true, dataset_name, threshold
     eer = (fpr_curve[eer_idx] + fnr_curve[eer_idx]) / 2.0
     tpr_at_fpr1 = tpr_curve[np.searchsorted(fpr_curve, 0.01, side='right') - 1]
     tpr_at_fpr5 = tpr_curve[np.searchsorted(fpr_curve, 0.05, side='right') - 1]
-    fpr_at_tpr1 = fpr_curve[np.searchsorted(tpr_curve, 0.01, side='left')]
-    fpr_at_tpr5 = fpr_curve[np.searchsorted(tpr_curve, 0.05, side='left')]
 
     metrics = {
     "dataset": dataset_name,
@@ -248,6 +246,17 @@ def main():
         # stores the CLIP encoder under pixel_branch.encoder.*).
         if (not model_expects_backbone) and any(k.startswith('backbone.') for k in ckpt.keys()):
             ckpt = {k: v for k, v in ckpt.items() if not k.startswith('backbone.')}
+        # Spectral projector buffers are fixed stats loaded from a .npz file,
+        # not learned weights, so older checkpoints may not contain them.
+        # Backfill from the freshly-initialised model so strict=True still holds.
+        current_sd = model.state_dict()
+        missing = {k for k in current_sd if k not in ckpt}
+        spectral_keys = {k for k in missing if k.startswith('spectral_projector.')}
+        non_spectral_missing = missing - spectral_keys
+        if spectral_keys and not non_spectral_missing:
+            for k in spectral_keys:
+                ckpt[k] = current_sd[k]
+            print(f'Backfilled {len(spectral_keys)} spectral_projector buffer(s) from model init.')
         model.load_state_dict(ckpt, strict=True)
         print('===> Checkpoint loaded.')
     else:

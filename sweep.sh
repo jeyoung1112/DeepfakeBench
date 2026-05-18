@@ -8,19 +8,19 @@ set -e
 
 BASE_CONFIG="./training/config/detector/dual_branch_scl.yaml"
 SWEEP_CONFIG_DIR="/tmp/dual_branch_scl_sweep"
-GPU=${CUDA_VISIBLE_DEVICES:-0}
+GPU=${CUDA_VISIBLE_DEVICES:-2}
 
 mkdir -p "$SWEEP_CONFIG_DIR"
 
 # ── Sweep grid ────────────────────────────────────────────────────────────────
-VAR_WEIGHTS=(0.5 1.0 2.0 5.0)   # Round 1: sweep var_weight, fix cov_weight below
+VAR_WEIGHTS=(7.0 10.0)   # Round 1: sweep var_weight, fix cov_weight below
 FIXED_COV=0.04
 
-BEST_VAR=1.0                  # Round 2: set after Round 1; sweep cov_weight
-COV_WEIGHTS=(0.02 0.04 0.1)
+BEST_VAR=5.0                  # Round 2: set after Round 1; sweep cov_weight
+COV_WEIGHTS=(0.25 0.5)
 
 # Set ROUND=1 to sweep var_weight, ROUND=2 to sweep cov_weight, ROUND=all for both
-ROUND=${ROUND:-all}
+ROUND=${ROUND:-2}
 # ─────────────────────────────────────────────────────────────────────────────
 
 patch_and_run() {

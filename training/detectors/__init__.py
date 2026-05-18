@@ -52,3 +52,7 @@ from .gend_detector import GenDDetector
 from .dual_branch import DualBranchDetector
 from .dual_branch_sdnorm import DualBranchSDNormDetector
 from .dual_branch_scl import DualBranchSCLDetector
+from .fdfl import FDFLDetector
+from .spectral_decorr import XceptionSpecDecorrDetector
+from .xception_lspnd import XceptionLPSNDDetector
+from .dual_branch_scl_original import DualBranchSCLDetectorOriginal

@@ -1,6 +1,7 @@
 import logging
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.models import resnet18
 from networks import BACKBONE
 
@@ -69,7 +70,6 @@ class SpectralResidualNorm(nn.Module):
         # Step 1: Log-magnitude spectrum
         log_mag = torch.log1p(mag)
 
-        
         # Step 2: Multi-scale smooth envelope estimation
         scale_w = torch.softmax(self.scale_weights, dim=0)
         envelope = torch.zeros_like(log_mag)
@@ -91,39 +91,22 @@ class SpectralResidualNorm(nn.Module):
         return torch.cat([mag_out, phase], dim=1)  # [B, 6, H, W]
 
 class OriginalSpectralResidualNorm(nn.Module):
-    """
-    Hou & Zhang 2007 spectral residual, adapted to match SpectralResidualNorm interface.
-    Input fft_coeffs: [B, 2C, H, W] — first C channels are magnitude, last C are phase.
-    Output: [B, 2C, H, W] — spectral residual replacing magnitude, phase unchanged.
-    """
-    def __init__(self, envelope_kernel=26):
+    def __init__(self, envelope_kernel=21):
         super().__init__()
-        self.envelope_kernel = envelope_kernel
-        self.num_mag_channels = 3
-
-        # Fixed box filter h_n(f): 1/n^2 averages log-amplitude spectrum
-        box = torch.ones(1, 1, envelope_kernel, envelope_kernel) / (envelope_kernel ** 2)
-        self.register_buffer('box', box)
+        # Uniform box filter, n x n, sums to 1
+        kernel = torch.ones(3, 1, envelope_kernel, envelope_kernel) / (envelope_kernel * envelope_kernel)
+        self.register_buffer('kernel', kernel)
+        self.padding = envelope_kernel // 2
 
     def forward(self, fft_coeffs):
-        mc = self.num_mag_channels
-        mag = fft_coeffs[:, :mc]    # [B, C, H, W]
-        phase = fft_coeffs[:, mc:]  # [B, C, H, W]
+        mag = fft_coeffs[:, :3]
+        phase = fft_coeffs[:, 3:]
+        log_mag = torch.log1p(mag)
+        envelope = F.conv2d(log_mag, self.kernel, padding=self.padding, groups=3)
+        residual = log_mag - envelope
+        return torch.cat([residual, phase], dim=1)
 
-        B, C, H, W = mag.shape
 
-        # Log spectrum (Eq 7)
-        L = torch.log1p(mag)
-
-        # Smooth envelope via box filter, then residual R = L - A_hat (Eq 3/8)
-        L_flat = L.view(B * C, 1, H, W)
-        pad = self.envelope_kernel // 2
-        A_hat = torch.nn.functional.conv2d(L_flat, self.box, padding=pad)
-        A_hat = A_hat[:, :, :H, :W]
-        R = (L_flat - A_hat).view(B, C, H, W)
-
-        return torch.cat([R, phase], dim=1)
-    
 
 class FrequencyBranch(nn.Module):
     def __init__(self, config):

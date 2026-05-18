@@ -14,8 +14,8 @@ from loss import LOSSFUNC
 
 logger = logging.getLogger(__name__)
 
-@DETECTOR.register_module(module_name='dual_branch_scl')
-class DualBranchSCLDetector(AbstractDetector):
+@DETECTOR.register_module(module_name='dual_branch_scl_original')
+class DualBranchSCLDetectorOriginal(AbstractDetector):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
@@ -43,7 +43,6 @@ class DualBranchSCLDetector(AbstractDetector):
         self.scl_weight = config.get('scl_weight', 0.1)
         self.var_weight = config.get('var_weight', 0.04)
         self.cov_weight = config.get('cov_weight', 0.01)
-        self.real_only = config.get("varcov_real_only", False)
 
         self._diag_step = 0
         self._diag_log_every = config.get('diag_log_every', 500)
@@ -56,6 +55,7 @@ class DualBranchSCLDetector(AbstractDetector):
             'pixel_branch': self.pixel_branch,
             'freq_branch': self.freq_branch,
             'head': self.head,
+            'scl_loss': self.scl_loss
         }
 
         for name, module in components.items():
@@ -65,6 +65,13 @@ class DualBranchSCLDetector(AbstractDetector):
                 total += t
                 trainable += tr
                 logger.info(f"  {name}: {tr:,} trainable / {t:,} total")
+        
+        for name, param in self.named_parameters():
+            if 'center' in name:
+                logger.info(
+                    f"  [SCL center check] {name}: shape={tuple(param.shape)}, "
+                    f"requires_grad={param.requires_grad}"
+                )
 
         logger.info(f"DualBranch [{self.mode}]: {trainable:,} trainable / {total:,} total")
 
@@ -100,9 +107,9 @@ class DualBranchSCLDetector(AbstractDetector):
 
         scl_loss = None
         if config.get('mode', 'dual') == 'dual':
-            scl_loss = LOSSFUNC['scl'](
+            scl_loss = LOSSFUNC['scl_original'](
                 feat_dim=fused_dim,
-                ema_tau=config.get('scl_ema_tau', 0.99),
+                margin=config.get('scl_margin', 0.3),
             )
 
         varcov_loss = LOSSFUNC['varcov']()
@@ -171,8 +178,8 @@ class DualBranchSCLDetector(AbstractDetector):
             overall = overall + self.scl_weight * scl_loss
 
         feat = pred_dict['feat']
-        if self.real_only:
-            feat = feat[label == 0]
+        # if real only:
+        #   target_feat = feat[label == 0]
         if feat.size(0) > 1 and feat.size(1) > 0:
             var_loss, cov_loss = self.varcov_loss(feat)
             losses['var'] = var_loss
@@ -205,14 +212,10 @@ class DualBranchSCLDetector(AbstractDetector):
             parts.append(feat_dict['y_freq'])
         feat_tensor = torch.cat(parts, dim=-1) if parts else pred.new_zeros(pred.size(0), 0)
 
-        # Penultimate head features (before final linear) — more discriminative for visualization.
-        cls_feat = self.head[:-1](feat_tensor)
-
         pred_dict = {
             'cls': pred,
             'prob': prob,
             'feat': feat_tensor,
-            'cls_feat': cls_feat,
             'feat_dict': feat_dict,
         }
 

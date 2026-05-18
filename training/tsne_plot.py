@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import yaml
+from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from tqdm import tqdm
 
@@ -25,21 +26,27 @@ parser = argparse.ArgumentParser(
     description="Plot t-SNE of detector feature embeddings."
 )
 parser.add_argument(
+    "--model_name",
+    type=str,
+    default="dual_scl",
+    help="Name of the model for testing",
+)
+parser.add_argument(
     "--detector_path",
     type=str,
-    default="training/config/detector/dual_branch.yaml",
+    default="training/config/detector/dual_branch_scl.yaml",
     help="Path to detector YAML file.",
 )
 parser.add_argument(
     "--weights_path",
     type=str,
-    default="/media/NAS/USERS/jeyoung/checkpoints/FF_trained/dual_base_ckpt_best.pth",
+    default="/media/NAS/USERS/jeyoung/checkpoints/FF_trained/covariance_sweep/dual_scl_cov_0.1.pth",
     help="Checkpoint to evaluate.",
 )
 parser.add_argument(
     "--test_dataset",
     nargs="+",
-    default=None,
+    default=["FaceForensics++", "Celeb-DF-v2", "DFDC", "DFDCP", "DeepFakeDetection"],
     help="Dataset(s) to test. If omitted, uses detector config test_dataset.",
 )
 parser.add_argument(
@@ -51,7 +58,7 @@ parser.add_argument(
 parser.add_argument(
     "--max_samples_per_class",
     type=int,
-    default=1000,
+    default=500,
     help="Max real and fake samples each to collect per dataset. 0 = no limit.",
 )
 parser.add_argument(
@@ -71,6 +78,12 @@ parser.add_argument(
     choices=["label", "dataset", "both"],
     default="both",
     help="Color points by real/fake label, dataset, or produce both plots.",
+)
+parser.add_argument(
+    "--pca_components",
+    type=int,
+    default=50,
+    help="Apply PCA before t-SNE to this many components. 0 = skip PCA.",
 )
 args = parser.parse_args()
 
@@ -214,9 +227,11 @@ def collect_features(model, data_loader, max_samples_per_class):
 
         pred = inference(model, data_dict)
 
-        feat = pred.get("feat")
+        feat = pred.get("cls_feat")
         if feat is None:
-            raise ValueError("Model prediction dict has no 'feat' key.")
+            feat = pred.get("feat")
+        if feat is None:
+            raise ValueError("Model prediction dict has no 'cls_feat' or 'feat' key.")
 
         batch_feats = flatten_features(feat)       # [B, D]
         batch_labels = binary_label.cpu().numpy()  # [B]
@@ -244,7 +259,10 @@ def collect_features(model, data_loader, max_samples_per_class):
     return feats, labels
 
 
-def run_tsne(feats_all, perplexity, n_iter):
+def run_tsne(feats_all, perplexity, n_iter, pca_components):
+    if pca_components > 0 and feats_all.shape[1] > pca_components:
+        print(f"Applying PCA: {feats_all.shape[1]}d -> {pca_components}d ...")
+        feats_all = PCA(n_components=pca_components, random_state=42).fit_transform(feats_all)
     print(f"Running t-SNE on {len(feats_all)} samples with {feats_all.shape[1]}-dim features...")
     tsne = TSNE(
         n_components=2,
@@ -280,119 +298,8 @@ def plot_by_label(embedding, labels_all, output_dir):
     ax.legend(markerscale=2.5, fontsize=9)
     plt.tight_layout()
 
-    path = os.path.join(output_dir, "tsne_by_label.png")
+    path = os.path.join(output_dir, f"{args.model_name}_tsne_by_label.png")
     plt.savefig(path, dpi=170)
-    plt.close(fig)
-    print(f"Saved: {path}")
-
-
-def plot_by_dataset(embedding, dataset_ids, dataset_names, labels_all, output_dir):
-    cmap = plt.get_cmap("tab20")
-    fig, ax = plt.subplots(figsize=(9.0, 6.4))
-
-    for idx, name in enumerate(dataset_names):
-        mask = dataset_ids == idx
-        color = cmap(idx % cmap.N)
-        ax.scatter(
-            embedding[mask, 0],
-            embedding[mask, 1],
-            s=6,
-            alpha=0.5,
-            color=color,
-            label=f"{name} (n={mask.sum()})",
-            linewidths=0,
-        )
-
-    ax.set_title("t-SNE colored by dataset")
-    ax.set_xlabel("t-SNE dim 1")
-    ax.set_ylabel("t-SNE dim 2")
-    ax.legend(markerscale=2.5, fontsize=8, bbox_to_anchor=(1.01, 1), loc="upper left")
-    plt.tight_layout()
-
-    path = os.path.join(output_dir, "tsne_by_dataset.png")
-    plt.savefig(path, dpi=170, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {path}")
-
-
-def plot_combined_real_vs_fake(embedding, dataset_ids, dataset_names, labels_all, output_dir):
-    """Single plot: color = dataset, marker = real (o) / fake (x)."""
-    cmap = plt.get_cmap("tab20")
-    label_markers = {0: "o", 1: "X"}
-    label_names   = {0: "Real", 1: "Fake"}
-
-    fig, ax = plt.subplots(figsize=(9.0, 6.4))
-
-    for idx, name in enumerate(dataset_names):
-        color = cmap(idx % cmap.N)
-        ds_mask = dataset_ids == idx
-
-        for lv in [0, 1]:
-            mask = ds_mask & (labels_all == lv)
-            if not mask.any():
-                continue
-            ax.scatter(
-                embedding[mask, 0],
-                embedding[mask, 1],
-                s=10,
-                alpha=0.55,
-                color=color,
-                marker=label_markers[lv],
-                linewidths=0,
-                label=f"{name} – {label_names[lv]}",
-            )
-
-    ax.set_title("t-SNE: all datasets — color=Dataset, marker=Real(o)/Fake(×)")
-    ax.set_xlabel("t-SNE dim 1")
-    ax.set_ylabel("t-SNE dim 2")
-    ax.legend(markerscale=1.8, fontsize=8, bbox_to_anchor=(1.01, 1), loc="upper left")
-    plt.tight_layout()
-
-    path = os.path.join(output_dir, "tsne_combined_real_vs_fake.png")
-    plt.savefig(path, dpi=170, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {path}")
-
-
-def plot_by_dataset_and_label(embedding, dataset_ids, dataset_names, labels_all, output_dir):
-    """One subplot per dataset; real/fake colored differently."""
-    n = len(dataset_names)
-    ncols = min(3, n)
-    nrows = (n + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5.5 * ncols, 4.5 * nrows), squeeze=False)
-
-    real_color = "#4C72B0"
-    fake_color = "#C44E52"
-
-    for idx, name in enumerate(dataset_names):
-        ax = axes[idx // ncols][idx % ncols]
-        ds_mask = dataset_ids == idx
-
-        for lv, color, lname in [(0, real_color, "Real"), (1, fake_color, "Fake")]:
-            mask = ds_mask & (labels_all == lv)
-            ax.scatter(
-                embedding[mask, 0],
-                embedding[mask, 1],
-                s=6,
-                alpha=0.55,
-                color=color,
-                label=f"{lname} (n={mask.sum()})",
-                linewidths=0,
-            )
-        ax.set_title(name, fontsize=9)
-        ax.legend(markerscale=2, fontsize=7)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    # Hide unused subplots
-    for idx in range(n, nrows * ncols):
-        axes[idx // ncols][idx % ncols].set_visible(False)
-
-    fig.suptitle("t-SNE by dataset (Real vs Fake)", fontsize=11)
-    plt.tight_layout()
-
-    path = os.path.join(output_dir, "tsne_by_dataset_and_label.png")
-    plt.savefig(path, dpi=170, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {path}")
 
@@ -442,28 +349,9 @@ def main():
     all_labels = np.concatenate(all_labels, axis=0)
     all_dataset_ids = np.concatenate(all_dataset_ids, axis=0)
 
-    embedding = run_tsne(all_feats, args.perplexity, args.n_iter)
+    embedding = run_tsne(all_feats, args.perplexity, args.n_iter, args.pca_components)
 
-    np.savez(
-        os.path.join(args.output_dir, "tsne_data.npz"),
-        embedding=embedding,
-        labels=all_labels,
-        dataset_ids=all_dataset_ids,
-        dataset_names=np.array(dataset_names),
-    )
-    print("Saved raw t-SNE data to tsne_data.npz")
-
-    plot_combined_real_vs_fake(embedding, all_dataset_ids, dataset_names, all_labels, args.output_dir)
-
-    if args.color_by in ("label", "both"):
-        plot_by_label(embedding, all_labels, args.output_dir)
-
-    if args.color_by in ("dataset", "both"):
-        plot_by_dataset(embedding, all_dataset_ids, dataset_names, all_labels, args.output_dir)
-        if len(dataset_names) > 1:
-            plot_by_dataset_and_label(
-                embedding, all_dataset_ids, dataset_names, all_labels, args.output_dir
-            )
+    plot_by_label(embedding, all_labels, args.output_dir)
 
     print("===> Done.")
 

@@ -15,19 +15,13 @@ lora_targets: ['q_proj', 'v_proj']
 freq_backbone: 'resnet18_freq'  # "resnet18_freq" or "xception"
 freq_backbone_name: 'resnet18_freq'
 freq_backbone_config:
-  inc: 3
+  inc: 6
   num_classes: 512            # embedding dim, not number of classes
 freq_out_dim: 512
-dct_log_scale: true
-
-# Frequency Branch (DCT + CNN)
-# freq_backbone: 'resnet18_freq'  # "resnet18_freq" or "xception"
-# freq_backbone_name: 'resnet18_freq'
-# freq_backbone_config:
-#   inc: 3
-#   num_classes: 512            # embedding dim, not number of classes
-# freq_out_dim: 512
 # dct_log_scale: true
+
+sr_type: original #original = paper style, modified=mine
+envelope_kernel: 21
 
 # VICReg alignment
 embed_dim: 4096             # expander size

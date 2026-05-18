@@ -1,0 +1,27 @@
+model_name:
+  - effort
+  - spsl
+
+
+
+detector_path:
+  - ./training/config/detector/effort.yaml
+  - ./training/config/detector/spsl.yaml
+
+
+
+test_dataset:
+  - "FaceForensics++"
+  - "DFDCP"
+  - "Celeb-DF-v2"
+  - "DFDC"
+  - "DeepFakeDetection"
+
+weights_path:
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/effort_ckpt_best.pth 
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/spsl_ckpt_best.pth
+
+
+gpu:
+  - 0
+  # - 1

@@ -1,0 +1,86 @@
+# Xception + Spectral Decorrelation (lambda=0.1)
+# Identical to vanilla Xception config except model_name and lambda_decorr
+
+log_dir: /data/home/zhiyuanyan/logs/testing_bench
+
+pretrained: /media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/xception-b5690688.pth
+model_name: xception_spec_decorr
+backbone_name: xception
+
+# ── Only new parameter ────────────────────────────────────────
+# Linear conditional (start here, drop-in replacement)
+# loss_mode: cross_cov
+# lambda_decorr: 0.1
+
+# OR nonlinear conditional (upgrade if linear works)
+loss_mode: hsic
+lambda_decorr: 0.1
+hsic_sigma_f: -1.0  # auto via median heuristic
+hsic_sigma_s: -1.0
+# ──────────────────────────────────────────────────────────────
+
+backbone_config:
+  dropout: 0.5
+  num_classes: 2
+  inc: 3
+  mode: original
+
+all_dataset: [FaceForensics++, FF-F2F, FF-DF, FF-FS, FF-NT, FaceShifter, DeepFakeDetection, Celeb-DF-v1, Celeb-DF-v2, DFDCP, DFDC, DeeperForensics-1.0, UADFV]
+train_dataset: [FaceForensics++]
+test_dataset: [FaceForensics++]
+save_ckpt: true
+save_feat: false
+
+compression: c23
+train_batchSize: 32
+test_batchSize: 32
+workers: 8
+frame_num: {'train': 32, 'test': 32}
+resolution: 256
+balance_data: false
+with_mask: false
+with_landmark: false
+
+use_data_augmentation: true
+data_aug:
+  flip_prob: 0.5
+  rotate_prob: 0.5
+  rotate_limit: [-10, 10]
+  blur_prob: 0.5
+  blur_limit: [3, 7]
+  brightness_prob: 0.5
+  brightness_limit: [-0.1, 0.1]
+  contrast_limit: [-0.1, 0.1]
+  quality_lower: 40
+  quality_upper: 100
+
+mean: [0.5, 0.5, 0.5]
+std: [0.5, 0.5, 0.5]
+
+optimizer:
+  type: adam
+  adam:
+    lr: 0.0002
+    beta1: 0.9
+    beta2: 0.999
+    eps: 0.00000001
+    weight_decay: 0.0005
+    amsgrad: false
+  sgd:
+    lr: 0.0002
+    momentum: 0.9
+    weight_decay: 0.0005
+
+lr_scheduler: null
+nEpochs: 10
+start_epoch: 0
+save_epoch: 1
+rec_iter: 100
+logdir: ./logs
+manualSeed: 1024
+
+loss_func: cross_entropy
+losstype: null
+metric_scoring: auc
+cuda: true
+cudnn: true
