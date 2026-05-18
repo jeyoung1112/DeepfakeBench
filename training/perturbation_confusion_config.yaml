@@ -1,0 +1,27 @@
+model_name:
+  - dual_original
+  - ours
+  - xception
+  - effort
+
+detector_path:
+  - ./training/config/detector/dual_branch_scl_original.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/xception.yaml
+  - ./training/config/detector/effort.yaml
+
+
+test_dataset:
+  - "FaceForensics++"
+  - "Celeb-DF-v2"
+
+weights_path:
+
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/dual_orig_2_ckpt_best.pth   
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/covariance_sweep/dual_scl_cov_0.1.pth
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/xception_ckpt_best.pth 
+  - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/effort_ckpt_best.pth 
+
+gpu:
+  - 2
+  # - 1
