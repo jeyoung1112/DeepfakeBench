@@ -1,0 +1,70 @@
+model_name:
+  - dual_branch_scl_var2_cov0.04
+  - dual_branch_scl_var2_cov0.08
+  - dual_branch_scl_var2_cov0.1
+  - dual_branch_scl_var2_cov0.15
+  - dual_branch_scl_var2_cov0.25
+  - dual_branch_scl_var5_cov0.04
+  - dual_branch_scl_var5_cov0.08
+  - dual_branch_scl_var5_cov0.1
+  - dual_branch_scl_var5_cov0.15
+  - dual_branch_scl_var5_cov0.25
+  - dual_branch_scl_var7_cov0.04
+  - dual_branch_scl_var7_cov0.08
+  - dual_branch_scl_var7_cov0.1
+  - dual_branch_scl_var7_cov0.15
+  - dual_branch_scl_var7_cov0.25
+  - dual_branch_scl_var10_cov0.04
+  - dual_branch_scl_var10_cov0.08
+  - dual_branch_scl_var10_cov0.1
+  - dual_branch_scl_var10_cov0.15
+  - dual_branch_scl_var10_cov0.25
+
+detector_path:
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+  - ./training/config/detector/dual_branch_scl.yaml
+
+  
+
+
+test_dataset:
+  - "FaceForensics++"
+  - "DFDCP"
+  - "Celeb-DF-v2"
+  - "DFDC"
+  - "DeepFakeDetection"
+
+weights_path:
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-09-11-42-53/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-10-01-57-00/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-10-16-15-41/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-11-06-35-46/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-11-20-49-34/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-12-10-57-58/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-13-00-59-54/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-13-15-03-15/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-14-04-54-50/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-15-03-34-23/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-15-17-57-46/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-16-08-05-53/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-16-22-15-31/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-17-12-27-49/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-18-02-16-31/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-18-16-43-01/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-19-09-54-54/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-20-01-24-20/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-20-16-29-30/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-06-21-07-47-28/test/FaceForensics++/ckpt_best.pth
+
+
+gpu:
+  - 1
+  # - 1
