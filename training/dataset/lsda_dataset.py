@@ -196,8 +196,21 @@ class LSDADataset(DeepfakeAbstractBaseDataset):
             self.normalize
         ])
         self.img_lines = []
-        self.config=config
-        with open(self.config['dataset_json_folder']+'/FaceForensics++.json', 'r') as fd:
+        self.config = config
+
+        # Override class-level paths with config-derived paths (normalize separators)
+        rgb_dir = config['rgb_dir'].replace('\\', '/')
+        self.data_root = '/'.join([rgb_dir, 'FaceForensics++'])
+        self.data_list = {
+            'test':  '/'.join([rgb_dir, 'FaceForensics++', 'test.json']),
+            'train': '/'.join([rgb_dir, 'FaceForensics++', 'train.json']),
+            'eval':  '/'.join([rgb_dir, 'FaceForensics++', 'val.json']),
+        }
+
+        dataset_json_path = os.path.join(
+            config['dataset_json_folder'], 'FaceForensics++.json'
+        ).replace('\\', '/')
+        with open(dataset_json_path, 'r') as fd:
             self.img_json = json.load(fd)
         with open(self.data_list[mode], 'r') as fd:
             data = json.load(fd)
@@ -245,7 +258,7 @@ class LSDADataset(DeepfakeAbstractBaseDataset):
     def load_image(self, name, idx):
         instance_type, video_name = name.split('/')
         #其实并没有完全对应，而只是保证在同一video的目标时间区间内的一帧
-        all_frames = self.img_json[self.data_root.split(os.path.sep)[-1]][self.transfer_dict[instance_type]]['train']['c23'][video_name]['frames']
+        all_frames = self.img_json[self.data_root.replace('\\', '/').split('/')[-1]][self.transfer_dict[instance_type]]['train']['c23'][video_name]['frames']
         img_path = all_frames[idx]
 
         impath = img_path

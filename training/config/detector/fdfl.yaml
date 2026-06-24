@@ -1,0 +1,93 @@
+# log dir
+log_dir: /data/home/zhiyuanyan/DeepfakeBench/logs/testing_bench
+
+# model setting
+pretrained: /media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/xception-b5690688.pth
+model_name: fdfl
+backbone_name: xception
+
+# backbone setting
+backbone_config:
+  mode: original
+  num_classes: 2
+  inc: 3
+  dropout: false
+
+# FDFL-specific hyperparameters
+lambda_scl: 0.5        # weight of SCL relative to softmax loss
+margin: 0.3            # margin scale factor m (actual margin = m * sqrt(D))
+freq_out_channels: 192 # output channels of AFIMB
+
+# dataset
+all_dataset: [FaceForensics++, FF-F2F, FF-DF, FF-FS, FF-NT, FaceShifter, DeepFakeDetection, Celeb-DF-v1, Celeb-DF-v2, DFDCP, DFDC, DeeperForensics-1.0, UADFV]
+train_dataset: [FaceForensics++]
+test_dataset: [FaceForensics++]
+
+compression: c23       # paper trains on c40 (most challenging)
+train_batchSize: 64
+test_batchSize: 64
+workers: 8
+frame_num:
+  train: {0: 80, 1: 20}   # 80 frames/real video, 20/fake → balances 1000 real vs 4000 fake videos
+  test: 32
+resolution: 256
+with_mask: false
+with_landmark: false
+
+save_ckpt: true
+save_feat: false
+
+# data augmentation
+use_data_augmentation: true
+data_aug:
+  flip_prob: 0.5
+  rotate_prob: 0.0
+  rotate_limit: [-10, 10]
+  blur_prob: 0.5
+  blur_limit: [3, 7]
+  brightness_prob: 0.5
+  brightness_limit: [-0.1, 0.1]
+  contrast_limit: [-0.1, 0.1]
+  quality_lower: 40
+  quality_upper: 100
+
+# mean and std for normalization
+mean: [0.5, 0.5, 0.5]
+std: [0.5, 0.5, 0.5]
+
+# optimizer
+optimizer:
+  type: sgd
+  adam:
+    lr: 0.0002
+    beta1: 0.9
+    beta2: 0.999
+    eps: 0.00000001
+    weight_decay: 0.0005
+    amsgrad: false
+  sgd:
+    lr: 0.001
+    momentum: 0.9
+    weight_decay: 0.001
+
+# training config
+lr_scheduler: cosine
+lr_T_max: 10
+lr_eta_min: 1e-6
+nEpochs: 20
+start_epoch: 0
+save_epoch: 1
+rec_iter: 100
+logdir: ./logs
+manualSeed: 1024
+
+# loss function
+loss_func: cross_entropy
+losstype: null
+
+# metric
+metric_scoring: auc
+
+# cuda
+cuda: true
+cudnn: true

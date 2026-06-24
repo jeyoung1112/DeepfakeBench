@@ -99,8 +99,9 @@ class DualBranchSCLDetector(AbstractDetector):
         cls_loss = cls_loss_class()
 
         scl_loss = None
-        if config.get('mode', 'dual') == 'dual':
-            scl_loss = LOSSFUNC['scl'](
+        if config.get('scl_weight', 0) > 0:
+            scl_variant = config.get('scl_variant', 'scl')
+            scl_loss = LOSSFUNC[scl_variant](
                 feat_dim=fused_dim,
                 ema_tau=config.get('scl_ema_tau', 0.99),
             )
@@ -165,7 +166,7 @@ class DualBranchSCLDetector(AbstractDetector):
         overall = cls_loss
         losses = {'cls': cls_loss}
 
-        if self.scl_loss is not None and self.mode == 'dual':
+        if self.scl_loss is not None:
             scl_loss = self.scl_loss(pred_dict['feat'], label)
             losses['scl'] = scl_loss
             overall = overall + self.scl_weight * scl_loss

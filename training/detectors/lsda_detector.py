@@ -157,7 +157,7 @@ class LSDADetector(AbstractDetector):
 class efficientnet(nn.Module):
     def __init__(self, pretrain='efficientnet-b4', sbi=None):
         super(efficientnet, self).__init__()
-        self.model = EfficientNet.from_pretrained(pretrain,weights_path='./training/pretrained/efficientnet-b4-6ed6700e.pth')
+        self.model = EfficientNet.from_pretrained(pretrain,weights_path='/media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/efficientnet-b4-6ed6700e.pth')
 
         if pretrain == 'efficientnet-b4':
             self.conv = nn.Conv2d(1792, 512, 1)

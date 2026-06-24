@@ -221,6 +221,7 @@ class SRMConv2d_simple(nn.Module):
         return out
 
     def _build_kernel(self, inc):
+        # https://openaccess.thecvf.com/content_cvpr_2018/CameraReady/2813.pdf
         # filter1: KB
         filter1 = [[0, 0, 0, 0, 0],
                    [0, -1, 2, -1, 0],
@@ -290,6 +291,7 @@ class SRMConv2d_Separate(nn.Module):
         return out
 
     def _build_kernel(self, inc):
+        # https://openaccess.thecvf.com/content_cvpr_2018/CameraReady/2813.pdf
         # filter1: KB
         filter1 = [[0, 0, 0, 0, 0],
                    [0, -1, 2, -1, 0],

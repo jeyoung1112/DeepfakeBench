@@ -2,8 +2,9 @@
 log_dir: /data/home/zhiyuanyan/logs/testing_bench
 
 # model setting
-pretrained: ./training/pretrained/xception-b5690688.pth   # path to a pre-trained model, if using one
+pretrained: /media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/xception-b5690688.pth  # path to a pre-trained model, if using one
 model_name: f3net   # model name
+freq_norm: "ass"
 backbone_name: xception  # backbone name
 
 # backbone setting
@@ -15,10 +16,10 @@ backbone_config:
 
 # dataset
 all_dataset: [FaceForensics++, FF-F2F, FF-DF, FF-FS, FF-NT, FaceShifter, DeepFakeDetection, Celeb-DF-v1, Celeb-DF-v2, DFDCP, DFDC, DeeperForensics-1.0, UADFV]
-train_dataset: [FF-NT]
-test_dataset: [FaceForensics++, FF-F2F, FF-DF, FF-FS, FF-NT]
+train_dataset: [FaceForensics++]
+test_dataset: [FaceForensics++]
 save_ckpt: true   # whether to save checkpoint
-save_feat: true   # whether to save features
+save_feat: false   # whether to save features
 
 compression: c23  # compression-level for videos
 train_batchSize: 32   # training batch size

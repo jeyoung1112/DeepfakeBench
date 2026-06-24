@@ -164,6 +164,23 @@ class SingleCenterLoss(nn.Module):
         
 #         return M_nat + hinge
 
+@LOSSFUNC.register_module(module_name='scl_learnable')
+class SingleCenterLossLearnable(nn.Module):
+    def __init__(self, feat_dim, **kwargs):
+        super().__init__()
+        self.center = nn.Parameter(F.normalize(torch.randn(feat_dim), dim=0))
+
+    def forward(self, features, labels):
+        real_mask = (labels == 0)
+        if real_mask.sum() == 0:
+            return torch.tensor(0.0, device=features.device, requires_grad=True)
+
+        feats = F.normalize(features, dim=1)
+        center = F.normalize(self.center.unsqueeze(0), dim=1).squeeze(0)
+        d = 1.0 - feats[real_mask] @ center
+        return d.mean()
+
+
 @LOSSFUNC.register_module(module_name='scl_original')
 class OriginalSingleCenterLoss(nn.Module):
     """

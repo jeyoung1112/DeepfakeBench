@@ -1,26 +1,34 @@
 #!/bin/bash
 # Var+Cov weight sweep for dual_branch_scl detector.
-# Round 1: fix cov_weight, sweep var_weight.
-# Round 2: fix best var_weight, sweep cov_weight.
-# Each run patches a temp config and trains sequentially.
+#
+# ROUND=grid    — full 2D grid (default); use for sensitivity analysis
+# ROUND=resume  — restart from (5.0, 0.25), then var=7 and var=10
+# ROUND=1       — fix cov at FIXED_COV, sweep var_weight only
+# ROUND=2       — fix var at BEST_VAR,  sweep cov_weight only
+#
+# Best known so far: var=5.0, cov=0.1
 
 set -e
 
 BASE_CONFIG="./training/config/detector/dual_branch_scl.yaml"
 SWEEP_CONFIG_DIR="/tmp/dual_branch_scl_sweep"
-GPU=${CUDA_VISIBLE_DEVICES:-2}
+GPU=${CUDA_VISIBLE_DEVICES:-1}
 
 mkdir -p "$SWEEP_CONFIG_DIR"
 
 # ── Sweep grid ────────────────────────────────────────────────────────────────
-VAR_WEIGHTS=(7.0 10.0)   # Round 1: sweep var_weight, fix cov_weight below
-FIXED_COV=0.04
+# 2D grid centered on the current best (var=5, cov=0.1).
+# Covariance is log-spaced; variance covers a ×5 range around the best.
+VAR_WEIGHTS=(2.0 5.0 7.0 10.0)
+COV_WEIGHTS=(0.04 0.08 0.1 0.15 0.25)
 
-BEST_VAR=5.0                  # Round 2: set after Round 1; sweep cov_weight
-COV_WEIGHTS=(0.25 0.5)
+# Coordinate-descent anchors (used when ROUND=1 or ROUND=2)
+FIXED_COV=0.1        # anchor for Round 1 — use the current best, not 0.04
+BEST_VAR=5.0         # anchor for Round 2
+VAR_WEIGHTS_R1=(2.0 5.0 7.0 10.0)
+COV_WEIGHTS_R2=(0.04 0.08 0.1 0.15 0.25)
 
-# Set ROUND=1 to sweep var_weight, ROUND=2 to sweep cov_weight, ROUND=all for both
-ROUND=${ROUND:-2}
+ROUND=${ROUND:-grid}
 # ─────────────────────────────────────────────────────────────────────────────
 
 patch_and_run() {
@@ -56,16 +64,33 @@ PYEOF
     echo ""
 }
 
-if [ "$ROUND" = "1" ] || [ "$ROUND" = "all" ]; then
-    echo "=== Round 1: sweep var_weight (cov_weight fixed at ${FIXED_COV}) ==="
+if [ "$ROUND" = "grid" ]; then
+    total=$(( ${#VAR_WEIGHTS[@]} * ${#COV_WEIGHTS[@]} ))
+    echo "=== 2D grid sweep: ${#VAR_WEIGHTS[@]} var × ${#COV_WEIGHTS[@]} cov = ${total} runs ==="
     for vw in "${VAR_WEIGHTS[@]}"; do
+        for cw in "${COV_WEIGHTS[@]}"; do
+            patch_and_run "$vw" "$cw"
+        done
+    done
+fi
+
+if [ "$ROUND" = "resume" ]; then
+    echo "=== Resume: var=10.0, cov in (0.08 0.1 0.15 0.25) ==="
+    for cw in 0.08 0.1 0.15 0.25; do
+        patch_and_run 10.0 "$cw"
+    done
+fi
+
+if [ "$ROUND" = "1" ]; then
+    echo "=== Round 1: sweep var_weight (cov_weight fixed at ${FIXED_COV}) ==="
+    for vw in "${VAR_WEIGHTS_R1[@]}"; do
         patch_and_run "$vw" "$FIXED_COV"
     done
 fi
 
-if [ "$ROUND" = "2" ] || [ "$ROUND" = "all" ]; then
+if [ "$ROUND" = "2" ]; then
     echo "=== Round 2: sweep cov_weight (var_weight fixed at ${BEST_VAR}) ==="
-    for cw in "${COV_WEIGHTS[@]}"; do
+    for cw in "${COV_WEIGHTS_R2[@]}"; do
         patch_and_run "$BEST_VAR" "$cw"
     done
 fi

@@ -1,5 +1,5 @@
 model_name: dual_branch_scl
-mode: dual
+mode: pixel_only
 
 # Pixel Branch
 clip_model_name: openai/clip-vit-large-patch14
@@ -21,13 +21,21 @@ freq_backbone_config:
   num_classes: 512
 freq_out_dim: 512
 
+# scl_weight: 0.1
+scl_variant: scl
+
 # Single Center Loss Paramters
 scl_weight: 0.1
 scl_ema_tau: 0.99
 
 varcov_real_only: false
-var_weight: 0
-cov_weight: 0
+
+var_weight: 5
+cov_weight: 0.1
+
+# var_weight: 0
+# cov_weight: 0
+
 
 # --- Loss ---
 loss_func: cross_entropy
@@ -51,7 +59,7 @@ rec_iter: 100   # interval iterations for recording
 logdir: ./logs   # folder to output images and logs
 manualSeed: 1024   # manual seed for random number generation
 save_ckpt: true   # whether to save checkpoint
-save_feat: true   # whether to save features
+save_feat: false   # whether to save features
 
 batchSize: 32
 frame_num: {'train': 32, 'test': 32}   # number of frames to use per video in training and testing
@@ -91,5 +99,3 @@ cudnn: true   # whether to use CuDNN for convolution operations
 
 # Logging & checkpoints
 log_dir: './logs/dual_branch'
-save_ckpt: true
-save_feat: false
