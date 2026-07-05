@@ -2,6 +2,9 @@
 # email: zhiyuanyan@link.cuhk.edu.cn
 # date: 2023-03-30
 # description: Abstract Base Class for all types of deepfake datasets.
+# MIDS patch: emits a per-sample manipulation-environment id (data_dict['env'])
+#             for the max-min deviation-subspace loss. -1 = real,
+#             0..M-1 = manipulation in train-list order, -2 = unmapped fake.
 
 import sys
 
@@ -44,6 +47,20 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
     """
     Abstract base class for all deepfake datasets.
     """
+
+    # === MIDS: manipulation-environment key map =============================
+    # Keys are canonical FF++ subset names; values are substrings matched
+    # against the raw JSON label (video_info['label']), NOT the frame path.
+    # Bare short tokens like 'DF'/'FS'/'NT' are deliberately excluded: they
+    # would false-match test-set labels such as 'DFDC_fake'/'CelebDFv2_fake'.
+    FFPP_MANIP_KEYS = {
+        'FF-DF':  ('FF-DF', 'Deepfakes'),
+        'FF-F2F': ('FF-F2F', 'Face2Face'),
+        'FF-FS':  ('FF-FS', 'FaceSwap'),
+        'FF-NT':  ('FF-NT', 'NeuralTextures'),
+    }
+    # =========================================================================
+
     def __init__(self, config=None, mode='train'):
         """Initializes the dataset object.
 
@@ -65,6 +82,20 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         self.video_level = config.get('video_mode', False)
         self.clip_size = config.get('clip_size', None)
         self.lmdb = config.get('lmdb', False)
+
+        # === MIDS: environment ordering (MUST precede data collection) ======
+        # Env ids are POSITIONAL in self.env_manips, and manip_to_env() is
+        # called inside collect_img_and_label_for_one_dataset() below, so this
+        # block has to run before the train/test collection branches.
+        #   LOMO:  train_dataset [FF-DF, FF-F2F, FF-FS] -> envs {0,1,2}
+        #          (set subspace_num_envs: 3 in the detector config)
+        #   Full:  train_dataset ['FaceForensics++']    -> canonical 4-way
+        #          DF=0, F2F=1, FS=2, NT=3 (dict order, Python >= 3.7)
+        train_list = config.get('train_dataset', []) or []
+        self.env_manips = [d for d in train_list if d in self.FFPP_MANIP_KEYS] \
+                          or list(self.FFPP_MANIP_KEYS)
+        # =====================================================================
+
         # Dataset dictionary
         self.image_list = []
         self.label_list = []
@@ -73,11 +104,14 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         if mode == 'train':
             dataset_list = config['train_dataset']
             # Training data should be collected together for training
-            image_list, label_list = [], []
+            image_list, label_list, env_list = [], [], []   # === MIDS: env_list
             for one_data in dataset_list:
-                tmp_image, tmp_label, tmp_name = self.collect_img_and_label_for_one_dataset(one_data)
+                # === MIDS: collect now returns a 4th (env) list ===
+                tmp_image, tmp_label, tmp_name, tmp_env = \
+                    self.collect_img_and_label_for_one_dataset(one_data)
                 image_list.extend(tmp_image)
                 label_list.extend(tmp_label)
+                env_list.extend(tmp_env)
             if self.lmdb:
                 if len(dataset_list)>1:
                     if all_in_pool(dataset_list,FFpp_pool):
@@ -91,7 +125,11 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         elif mode == 'test':
             one_data = config['test_dataset']
             # Test dataset should be evaluated separately. So collect only one dataset each time
-            image_list, label_list, name_list = self.collect_img_and_label_for_one_dataset(one_data)
+            # === MIDS: collect now returns a 4th (env) list.
+            # Non-FF++ test sets will map fakes to -2; that is expected and
+            # harmless (env is never consumed at test time).
+            image_list, label_list, name_list, env_list = \
+                self.collect_img_and_label_for_one_dataset(one_data)
             if self.lmdb:
                 lmdb_path = os.path.join(config['lmdb_dir'], f"{one_data}_lmdb" if one_data not in FFpp_pool else 'FaceForensics++_lmdb')
                 self.env = lmdb.open(lmdb_path, create=False, subdir=True, readonly=True, lock=False)
@@ -101,11 +139,17 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         assert len(image_list)!=0 and len(label_list)!=0, f"Collect nothing for {mode} mode!"
         self.image_list, self.label_list = image_list, label_list
 
+        # === MIDS: store env list, keep it aligned with images/labels =======
+        self.env_list = list(env_list)
+        assert len(self.env_list) == len(self.image_list), \
+            'env/image length mismatch -- env plumbing desynchronized'
+        # =====================================================================
 
         # Create a dictionary containing the image and label lists
         self.data_dict = {
             'image': self.image_list, 
             'label': self.label_list, 
+            'env': self.env_list,      # === MIDS
         }
         
         self.transform = self.init_data_aug_method()
@@ -136,6 +180,26 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         rescaled_landmarks = landmarks * scale_factor
         return rescaled_landmarks
 
+    # === MIDS: raw JSON label -> manipulation-environment id ================
+    def manip_to_env(self, raw_label, bin_label):
+        """Map a raw JSON video label (video_info['label']) to an env id.
+
+        Returns:
+            -1  for reals (bin_label == 0), regardless of raw_label
+            0..M-1 for fakes whose manipulation matches self.env_manips
+                   (positional: env id = index in the train-list order)
+            -2  for fakes that match nothing. Expected for non-FF++ test
+                sets (e.g. 'CelebDFv2_fake'); must be EMPTY in FF++
+                training batches -- a nonzero -2 count there means the JSON
+                uses a label key missing from FFPP_MANIP_KEYS.
+        """
+        if bin_label == 0:
+            return -1
+        for i, m in enumerate(self.env_manips):
+            if any(key in raw_label for key in self.FFPP_MANIP_KEYS[m]):
+                return i
+        return -2
+    # =========================================================================
 
     def collect_img_and_label_for_one_dataset(self, dataset_name: str):
         """Collects image and label lists.
@@ -146,6 +210,8 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         Returns:
             list: A list of image paths.
             list: A list of labels.
+            list: A list of video names.
+            list: A list of manipulation-environment ids (MIDS).
         
         Raises:
             ValueError: If image paths or labels are not found.
@@ -154,6 +220,7 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         # Initialize the label and frame path lists
         label_list = []
         frame_path_list = []
+        env_list = []   # === MIDS: manipulation id per frame (-1 = real)
         
         # Record video name for video-level metrics
         video_name_list = []
@@ -204,6 +271,11 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
                 if video_info['label'] not in self.config['label_dict']:
                     raise ValueError(f'Label {video_info["label"]} is not found in the configuration file.')
                 label = self.config['label_dict'][video_info['label']]
+
+                # === MIDS: env id from the RAW JSON label (authoritative
+                # manipulation source; frame paths get rewritten downstream).
+                env_id = self.manip_to_env(video_info['label'], label)
+
                 frame_paths = video_info['frames']
                 frame_paths = [f.replace('\\', '/') for f in frame_paths]
                 # sorted video path to the lists
@@ -261,6 +333,7 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
                         frame_path_list.extend(selected_clips)
                         # video name save
                         video_name_list.extend([unique_video_name] * len(selected_clips))
+                        env_list.extend([env_id] * len(selected_clips))   # === MIDS
 
                     else:
                         print(f"Skipping video {unique_video_name} because it has less than clip_size ({self.clip_size}) frames ({total_frames}).")
@@ -272,13 +345,15 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
                     frame_path_list.extend(frame_paths)
                     # video name save
                     video_name_list.extend([unique_video_name] * len(frame_paths))
+                    env_list.extend([env_id] * total_frames)   # === MIDS
             
         # Shuffle the label and frame path lists in the same order
-        shuffled = list(zip(label_list, frame_path_list, video_name_list))
+        # === MIDS: env_list must ride the same shuffle or it desynchronizes.
+        shuffled = list(zip(label_list, frame_path_list, video_name_list, env_list))
         random.shuffle(shuffled)
-        label_list, frame_path_list, video_name_list = zip(*shuffled)
+        label_list, frame_path_list, video_name_list, env_list = zip(*shuffled)
         
-        return frame_path_list, label_list, video_name_list
+        return frame_path_list, label_list, video_name_list, env_list
 
      
     def load_rgb(self, file_path):
@@ -461,11 +536,12 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
 
         Returns:
             A tuple containing the image tensor, the label tensor, the landmark tensor,
-            and the mask tensor.
+            the mask tensor, and the manipulation-environment id (MIDS).
         """
         # Get the image paths and label
         image_paths = self.data_dict['image'][index]
         label = self.data_dict['label'][index]
+        env = self.data_dict['env'][index]   # === MIDS
 
         if not isinstance(image_paths, list):
             image_paths = [image_paths]  # for the image-level IO, only one frame is used
@@ -548,7 +624,7 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
             if not any(m is None or (isinstance(m, list) and None in m) for m in mask_tensors):
                 mask_tensors = mask_tensors[0]
 
-        return image_tensors, label, landmark_tensors, mask_tensors
+        return image_tensors, label, landmark_tensors, mask_tensors, env   # === MIDS
     
     @staticmethod
     def collate_fn(batch):
@@ -557,14 +633,14 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
 
         Args:
             batch (list): A list of tuples containing the image tensor, the label tensor,
-                          the landmark tensor, and the mask tensor.
+                          the landmark tensor, the mask tensor, and the env id (MIDS).
 
         Returns:
-            A tuple containing the image tensor, the label tensor, the landmark tensor,
-            and the mask tensor.
+            A dict containing the stacked tensors, including data_dict['env']
+            (LongTensor [B]: -1 real, 0..M-1 manipulation id, -2 unmapped fake).
         """
-        # Separate the image, label, landmark, and mask tensors
-        images, labels, landmarks, masks = zip(*batch)
+        # Separate the image, label, landmark, mask, and env tensors
+        images, labels, landmarks, masks, envs = zip(*batch)   # === MIDS
         
         # Stack the image, label, landmark, and mask tensors
         images = torch.stack(images, dim=0)
@@ -587,6 +663,7 @@ class DeepfakeAbstractBaseDataset(data.Dataset):
         data_dict['label'] = labels
         data_dict['landmark'] = landmarks
         data_dict['mask'] = masks
+        data_dict['env'] = torch.LongTensor(envs)   # === MIDS
         return data_dict
 
     def __len__(self):
@@ -623,7 +700,8 @@ if __name__ == "__main__":
         )
     from tqdm import tqdm
     for iteration, batch in enumerate(tqdm(train_data_loader)):
-        # print(iteration)
-        ...
-        # if iteration > 10:
-        #     break
+        # === MIDS sanity check: expect -1 (reals) plus 0..3 spread; NO -2.
+        vals, counts = batch['env'].unique(return_counts=True)
+        print('env ids:', vals.tolist(), 'counts:', counts.tolist())
+        if iteration > 5:
+            break

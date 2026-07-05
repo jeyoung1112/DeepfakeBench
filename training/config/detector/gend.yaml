@@ -1,12 +1,15 @@
+# GenD / LNCLIP-DF  (arXiv:2508.06248) -> detector module 'gend'
+# log_dir is overridden by train_config.yaml to ./logs/training/.
+
 # log dir
 log_dir: ./logs/training/gend
 
 # model setting
-pretrained: ~  # no pretrained path needed; weights loaded from HuggingFace
+pretrained: ~  # CLIP ViT-L/14 weights load from HuggingFace inside the detector
 model_name: gend
 backbone_name: vit
 
-# backbone setting
+# backbone setting (inert for CLIP: the HF model string is hardcoded in the detector)
 backbone_config:
   mode: original
   num_classes: 2
@@ -18,16 +21,23 @@ all_dataset: [FaceForensics++, FF-F2F, FF-DF, FF-FS, FF-NT, FaceShifter, DeepFak
 train_dataset: [FaceForensics++]
 test_dataset: [FaceForensics++]
 
+# Same-source-video real/fake pairing (paper's core anti-shortcut mechanism): each fake
+# is paired with a real frame from the video it was generated from (FF++ '001_870' -> '001').
+# videoPairDataset also yields a balanced real+fake batch, so the alignment loss and
+# same-class Slerp always have same-class partners of both classes.
+dataset_type: video_pair
+
 compression: c23
-train_batchSize: 32
+train_batchSize: 16     # -> 32 images/batch after real+fake pairing (ViT-L/14 fp32 fits ~24GB;
+                        # paper base batch is 128 on bigger GPUs. Raise if GPU 1 is dedicated.)
 test_batchSize: 32
 workers: 8
 frame_num: {'train': 32, 'test': 32}
-resolution: 224
+resolution: 224         # ViT-L/14 patch14 -> 16x16 tokens at 224px
 with_mask: false
 with_landmark: false
 
-# data augmentation
+# data augmentation (paper: hflip, affine, blur, color jitter, JPEG)
 use_data_augmentation: true
 data_aug:
   flip_prob: 0.5
@@ -41,28 +51,35 @@ data_aug:
   quality_lower: 40
   quality_upper: 100
 
-# CLIP normalization
-mean: [0.5, 0.5, 0.5]
-std: [0.5, 0.5, 0.5]
+# True OpenAI CLIP normalization (the encoder was pretrained with these stats).
+# NOTE: other CLIP configs in this repo use [0.5,0.5,0.5]; using CLIP's own stats matches
+# the pretrained encoder's input distribution. A/B against 0.5/0.5/0.5 if desired.
+mean: [0.48145466, 0.4578275, 0.40821073]
+std: [0.26862954, 0.26130258, 0.27577711]
 
-# optimizer config
+# optimizer: Adam, NO weight decay (paper). With L2-normalized features and no logit
+# temperature, wd=0 lets the head weights absorb the softmax scale.
 optimizer:
   type: adam
   adam:
-    lr: 0.0002
+    lr: 0.0003          # peak LR (paper warms up to 3e-4)
     beta1: 0.9
     beta2: 0.999
     eps: 0.00000001
-    weight_decay: 0.0005
+    weight_decay: 0.0
     amsgrad: false
   sgd:
     lr: 0.0002
     momentum: 0.9
-    weight_decay: 0.0005
+    weight_decay: 0.0
 
 # training config
-lr_scheduler: null
-nEpochs: 10
+# Cosine annealing stepped per-epoch; T_max=10 over 20 epochs ~= the paper's 2x 10-epoch
+# cyclic cosine (repo has no warmup scheduler, so the 1-epoch 1e-5->3e-4 warmup is omitted).
+lr_scheduler: cosine
+lr_T_max: 10
+lr_eta_min: 0.00001
+nEpochs: 20
 start_epoch: 0
 save_epoch: 1
 rec_iter: 100
@@ -75,9 +92,13 @@ save_feat: true
 loss_func: cross_entropy
 losstype: null
 
-# GenD-specific loss weights (alignment + uniformity)
+# GenD loss weights (Eq.2): L = CE + alpha*align + beta*uniform
 lambda_align: 0.1
 lambda_unif: 0.5
+
+# Slerp latent augmentation (paper expands batch 128 -> 1024, i.e. 8x). Training only.
+use_slerp: true
+slerp_expand: 8
 
 # metric
 metric_scoring: auc

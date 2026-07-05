@@ -291,10 +291,7 @@ class Trainer(object):
                 for k, v in train_recorder_loss.items():
                     v_avg = v.average()
                     if v_avg == None:
-                        loss_str += f"training-loss, {k}: not calculated"
-                        writer = self.get_writer('train', ..., k)
-                        writer.add_scalar(f'train_loss/{k}', v_avg, global_step=step_cnt)
-                        train_log[f"train_loss/{k}"] = v_avg
+                        loss_str += f"training-loss, {k}: not calculated    "
                         continue
                     loss_str += f"training-loss, {k}: {v_avg}    "
                     # tensorboard-1. loss
@@ -308,9 +305,6 @@ class Trainer(object):
                     v_avg = v.average()
                     if v_avg == None:
                         metric_str += f"training-metric, {k}: not calculated    "
-                        writer = self.get_writer('train', ..., k)
-                        writer.add_scalar(f'train_metric/{k}', v_avg, global_step=step_cnt)
-                        train_log[f"train_metric/{k}"] = v_avg
                         continue
                     metric_str += f"training-metric, {k}: {v_avg}    "
                     # tensorboard-2. metric

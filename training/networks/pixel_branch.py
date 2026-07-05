@@ -62,8 +62,10 @@ class PixelBranch(nn.Module):
             self.encoder.eval()
         return self
 
-    def forward(self, x):
+    def forward(self, x, return_tokens=False):
         outputs = self.encoder(pixel_values=x)
-        y_pixel = outputs.pooler_output  #[B, out_dim]
-        y_pixel = self.norm(y_pixel)
-        return y_pixel
+        pooled = self.norm(outputs.pooler_output)
+        if return_tokens:
+            tokens = outputs.last_hidden_state[:, 1:, :]   # [B, 256, 1024], drop CLS
+            return pooled, tokens
+        return pooled

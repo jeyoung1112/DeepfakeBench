@@ -77,3 +77,61 @@ class VarCovRegLoss(nn.Module):
 
     def forward(self, z):
         return self.variance(z), self.covariance(z)
+
+@LOSSFUNC.register_module(module_name='aniso_varcov')
+class AnisotropicVarCovLoss(nn.Module):
+    """Forgery-orthogonal variance/covariance regularization.
+    Forgery subspace = top-k eigenvectors of (Cov_fake - Cov_real), EMA-tracked.
+    Var+cov hinge is applied only in the complementary content subspace, so SCL
+    is free to collapse the real class along forgery directions while content
+    diversity (identity/pose/lighting) is preserved for cross-manip transfer.
+    """
+    def __init__(self, feat_dim, k=16, gamma=1.0, eps=1e-4,
+                 cov_ema=0.99, refresh_every=200, apply_to='real'):
+        super().__init__()
+        self.k, self.gamma, self.eps = k, gamma, eps
+        self.cov_ema, self.refresh_every, self.apply_to = cov_ema, refresh_every, apply_to
+        self.register_buffer('delta', torch.zeros(feat_dim, feat_dim))
+        self.register_buffer('Q', torch.eye(feat_dim))      # eigvecs of delta (ascending)
+        self.register_buffer('initialized', torch.tensor(False))
+        self._step = 0
+
+    @staticmethod
+    def _cov(z):
+        z = z - z.mean(dim=0, keepdim=True)
+        return (z.T @ z) / max(z.size(0) - 1, 1)
+
+    @torch.no_grad()
+    def _update_subspace(self, feat, labels):
+        real, fake = feat[labels == 0].float(), feat[labels == 1].float()
+        if real.size(0) < 2 or fake.size(0) < 2:
+            return
+        d = self._cov(fake) - self._cov(real)
+        if not self.initialized:
+            self.delta.copy_(d); self.initialized.fill_(True)
+        else:
+            self.delta.mul_(self.cov_ema).add_(d, alpha=1 - self.cov_ema)
+        if self._step % self.refresh_every == 0:
+            sym = 0.5 * (self.delta + self.delta.T)
+            _, evecs = torch.linalg.eigh(sym)               # ascending -> forgery = last k
+            self.Q.copy_(evecs)
+
+    def _var_cov(self, z):
+        std = torch.sqrt(z.var(dim=0) + self.eps)
+        var = torch.mean(F.relu(self.gamma - std))
+        n, d = z.shape
+        zc = z - z.mean(dim=0)
+        cov = (zc.T @ zc) / max(n - 1, 1)
+        cov.fill_diagonal_(0)
+        return var, cov.pow(2).sum() / d
+
+    def forward(self, feat, labels):
+        self._step += 1
+        self._update_subspace(feat.detach(), labels)
+        target = feat[labels == 0] if self.apply_to == 'real' else feat
+        if target.size(0) < 2:
+            z0 = feat.new_zeros(()); return z0, z0
+        if not self.initialized:
+            return self._var_cov(target)                    # isotropic warmup
+        z = target @ self.Q                                 # rotate into delta-eigenbasis
+        return self._var_cov(z[:, :-self.k])                # drop top-k forgery coords

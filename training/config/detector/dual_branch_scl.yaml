@@ -1,5 +1,5 @@
 model_name: dual_branch_scl
-mode: pixel_only
+mode: dual
 
 # Pixel Branch
 clip_model_name: openai/clip-vit-large-patch14
@@ -30,12 +30,12 @@ scl_ema_tau: 0.99
 
 varcov_real_only: false
 
-var_weight: 5
-cov_weight: 0.1
+# var_weight: 5
+# cov_weight: 0.1
+var_weight: 0
+cov_weight: 0
 
-# var_weight: 0
-# cov_weight: 0
-
+aniso_varcov: true
 
 # --- Loss ---
 loss_func: cross_entropy

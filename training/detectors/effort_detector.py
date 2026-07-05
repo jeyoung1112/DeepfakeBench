@@ -38,6 +38,10 @@ class EffortDetector(nn.Module):
         self.prob, self.label = [], []
         self.correct, self.total = 0, 0
 
+        # Feature-collapse diagnostics (logged every N training steps; 0 disables)
+        self._diag_step = 0
+        self._diag_log_every = (config or {}).get('diag_log_every', 500)
+
     def build_backbone(self, config):
         # Download model
         # https://huggingface.co/openai/clip-vit-large-patch14
@@ -107,6 +111,52 @@ class EffortDetector(nn.Module):
         loss2 /= len(weight_sum_dict.keys())
         return loss2
 
+    @torch.no_grad()
+    def _log_feature_diagnostics(self, feat: torch.Tensor, label: torch.Tensor) -> None:
+        """Log feature-collapse indicators for the penultimate embedding.
+
+        `feat` is the (B, D) embedding fed to the classifier head (here CLIP's
+        1024-d pooler_output). Metrics mirror dual_branch_scl / xception for
+        cross-run comparability: per-class L2 norm, per-class mean variance, and
+        the effective rank of the real-class covariance -- a direct measure of
+        dimensional collapse (eff_rank -> 1 means features live on ~1 axis;
+        0.00 means total collapse to a single point).
+        """
+        real_mask = label == 0
+        fake_mask = label >= 1  # any non-real label counts as fake
+
+        # Per-class L2 norms
+        for cls_name, mask in (('real', real_mask), ('fake', fake_mask)):
+            if mask.sum() > 0:
+                mean_norm = feat[mask].norm(dim=1).mean().item()
+                logger.info(f"  feat_norm/{cls_name}: {mean_norm:.4f}")
+
+        # Per-class mean per-dimension variance (collapse -> variance -> 0)
+        for cls_name, mask in (('real', real_mask), ('fake', fake_mask)):
+            if mask.sum() > 1:
+                var = feat[mask].float().var(dim=0).mean().item()
+                logger.info(f"  {cls_name}_feat_var: {var:.4f}")
+
+        # Effective rank of the real-class covariance: exp(H), where H is the
+        # entropy of the normalised eigenvalue spectrum. Uses SVD on mean-centred
+        # features for numerical stability (batch is small, so no dim truncation).
+        if real_mask.sum() > 1:
+            real_feats = feat[real_mask].float()
+            centered = real_feats - real_feats.mean(dim=0, keepdim=True)
+            try:
+                _, S, _ = torch.linalg.svd(centered, full_matrices=False)
+                eigvals = S.pow(2) / max(centered.size(0) - 1, 1)
+                eigvals = eigvals[eigvals > 1e-12]
+                if eigvals.numel() == 0:
+                    # All variance gone -> features collapsed to a single point.
+                    logger.info("  real_cov_eff_rank: 0.00 (collapsed)")
+                else:
+                    p = eigvals / eigvals.sum()
+                    eff_rank = torch.exp(-(p * p.log()).sum()).item()
+                    logger.info(f"  real_cov_eff_rank: {eff_rank:.2f}")
+            except Exception as e:  # SVD non-convergence / NaN features
+                logger.debug(f"  real_cov_eff_rank skipped: {e!r}")
+
     def get_losses(self, data_dict: dict, pred_dict: dict) -> dict:
         label = data_dict['label']  # Tensor of shape [batch_size]
         pred = pred_dict['cls']     # Tensor of shape [batch_size, num_classes]
@@ -147,6 +197,14 @@ class EffortDetector(nn.Module):
             'fake_loss': loss_fake,
             # 'erank_loss': loss2
         }
+
+        # Periodically log feature-collapse diagnostics on the penultimate embedding.
+        self._diag_step += 1
+        if self._diag_log_every > 0 and self._diag_step % self._diag_log_every == 0:
+            feat = pred_dict.get('cls_feat', pred_dict.get('feat'))
+            if feat is not None and feat.dim() == 2 and feat.size(0) > 1:
+                logger.info(f"[diag step={self._diag_step}]")
+                self._log_feature_diagnostics(feat.detach(), label.detach())
         return loss_dict
 
     def get_train_metrics(self, data_dict: dict, pred_dict: dict) -> dict:

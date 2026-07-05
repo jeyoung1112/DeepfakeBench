@@ -1,0 +1,100 @@
+model_name: dual_branch_mids          # CHANGED: new registry name
+mode: dual
+
+# Pixel Branch
+clip_model_name: openai/clip-vit-large-patch14
+freeze_clip: false
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.1
+lora_targets: ['q_proj', 'v_proj']
+
+mean: [0.48145466, 0.4578275, 0.40821073]
+std:  [0.26862954, 0.26130258, 0.27577711]
+
+# Frequency Branch (FFT)
+freq_backbone: resnet18
+freq_backbone_name: resnet18_freq
+freq_backbone_config:
+  inc: 6
+  num_classes: 512
+freq_out_dim: 512
+
+# Single Center Loss
+scl_variant: scl
+scl_weight: 0.1
+scl_ema_tau: 0.99
+
+var_weight: 5                          
+cov_weight: 0.1                        
+varcov_real_only: false               
+
+subspace_reg: maxmin                   # off | pooled | maxmin
+subspace_k: 16
+# subspace_num_envs: 4                   # 4 for full FF++, 3 for LOMO
+subspace_moment_ema: 0.995
+subspace_refresh_every: 200
+subspace_warmup_steps: 500
+subspace_solver_iters: 30
+subspace_solver_lr: 0.5
+subspace_apply_to: real
+inv_head_weight: 0.0                   # phase 2 only
+
+loss_func: cross_entropy
+
+optimizer:
+  type: adam
+  adam:
+    lr: 0.0002
+    beta1: 0.9
+    beta2: 0.999
+    eps: 0.00000001
+    weight_decay: 0.0005
+    amsgrad: false
+
+lr_scheduler: null
+nEpochs: 10
+start_epoch: 0
+save_epoch: 1
+rec_iter: 100
+manualSeed: 1024                       # NOTE: appears twice in your file; YAML keeps the last — delete one
+save_ckpt: true
+save_feat: false
+
+batchSize: 32
+frame_num: {'train': 32, 'test': 32}
+resolution: 224
+
+# train_dataset: ['FaceForensics++']
+# test_dataset: ['FaceForensics++']
+# , Celeb-DF-v2, DFDC, DFDCP, DeepFakeDetection]   # CHANGED: full eval suite
+compression: 'c23'
+train_batchSize: 32
+test_batchSize: 32
+workers: 8
+with_mask: false
+with_landmark: false
+
+use_data_augmentation: true
+data_aug:
+  flip_prob: 0.5
+  rotate_prob: 0.5
+  rotate_limit: 10
+  blur_prob: 0.5
+  blur_limit: 7
+  brightness_prob: 0.5
+  brightness_limit: 0.1
+  contrast_limit: 0.1
+  quality_lower: 40
+  quality_upper: 100
+
+metric_scoring: auc
+cuda: true
+cudnn: true
+log_dir: './logs/mids_maxmin_s1024'    # CHANGED: encode mode+seed per run
+
+
+
+train_dataset: [FF-DF, FF-F2F, FF-FS]
+test_dataset: [FF-NT, Celeb-DF-v2]
+subspace_num_envs: 3   

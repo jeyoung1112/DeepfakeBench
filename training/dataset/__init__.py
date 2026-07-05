@@ -14,6 +14,7 @@ from .ff_blend import FFBlendDataset
 from .fwa_blend import FWABlendDataset
 from .lrl_dataset import LRLDataset
 from .pair_dataset import pairDataset
+from .video_pair_dataset import videoPairDataset
 from .sbi_dataset import SBIDataset
 from .lsda_dataset import LSDADataset
 from .tall_dataset import TALLDataset

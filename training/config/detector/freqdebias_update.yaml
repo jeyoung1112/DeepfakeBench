@@ -1,0 +1,116 @@
+# Corrected FreqDebias config -> detector module 'freqdebias_update'.
+# Original freqdebias.yaml is kept intact for A/B comparison.
+# log_dir is overridden by train_config.yaml to ./logs/training/, so this run lands in
+# ./logs/training/freqdebias_update_<timestamp>/.
+
+# log dir
+log_dir: ./logs/training/
+
+# model setting
+pretrained: /media/NAS/USERS/jeyoung/pretrained_DeepfakeBench/resnet34-b627a593.pth   # ImageNet ResNet-34
+model_name: freqdebias_update   # MUST match @DETECTOR.register_module(module_name=...)
+backbone_name: resnet34
+
+#backbone setting
+backbone_config:
+  mode: original
+  num_classes: 2
+  inc: 3
+  dropout: false
+
+feat_channels: 512
+cat_dim: 512
+tau: 4.0
+
+# loss weights. delta (L_att) and rho (L_sphere) are the two terms that actually align the
+# synthesized vs original views (the cross-domain debiasing). At the paper defaults
+# (delta=0.1, rho=0.1) they were <0.5% of the loss budget and exerted no pressure, so they
+# are raised 10x here. eta/mu kept at paper defaults. Tune from the [diag] logs.
+loss_weights:
+  eta: 0.5      # paper default 0.5  (L_CAM)
+  delta: 1.0    # paper default 0.1  (L_att   -- raised)
+  mu: 1.0       # paper default 1.0  (L_cls_sphere)
+  rho: 1.0      # paper default 0.1  (L_sphere -- raised)
+
+confidence_lambda: 0.5
+fo_mixup:
+  n_radial: 4
+  n_angular: 8
+  k: 8
+  top_t: 3
+  p_a_std: 0.1   # amplitude perturbation std (paper text N(1,0); exposed for tuning)
+
+# diagnostics: every N training iters log ||x_s-x_t||/||x_t|| and the OHEM band-loss spread
+debug_log_interval: 100
+
+# dataset
+all_dataset: [FaceForensics++, FF-F2F, FF-DF, FF-FS, FF-NT, FaceShifter, DeepFakeDetection, Celeb-DF-v1, Celeb-DF-v2, DFDCP, DFDC, DeeperForensics-1.0, UADFV]
+train_dataset: [FaceForensics++]
+test_dataset: [FaceForensics++]
+
+# frozen detector used only for OHEM band scoring inside Fo-Mixup (loaded strict=False)
+scorer_checkpoint: /home/jeyoung/personal/DeepfakeBench/logs/training/freqdebias_2026-06-23-07-44-56/test/FaceForensics++/ckpt_best.pth
+
+compression: c23
+train_batchSize: 32
+test_batchSize: 32
+workers: 8
+frame_num: {'train': 32, 'test': 32}
+resolution: 256
+with_mask: false
+with_landmark: false
+save_ckpt: true
+save_feat: false
+
+# data augmentation
+use_data_augmentation: false
+data_aug:
+  flip_prob: 0.5
+  rotate_prob: 0.5
+  rotate_limit: [-10, 10]
+  blur_prob: 0.5
+  blur_limit: [3, 7]
+  brightness_prob: 0.5
+  brightness_limit: [-0.1, 0.1]
+  contrast_limit: [-0.1, 0.1]
+  quality_lower: 40
+  quality_upper: 100
+
+# mean and std for normalization -> images reach the detector in [-1, 1]
+mean: [0.5, 0.5, 0.5]
+std: [0.5, 0.5, 0.5]
+
+# optimizer config
+optimizer:
+  type: adam
+  adam:
+    lr: 0.0001
+    beta1: 0.9
+    beta2: 0.999
+    eps: 0.00000001
+    weight_decay: 0.0005
+    amsgrad: false
+  sgd:
+    lr: 0.0002
+    momentum: 0.9
+    weight_decay: 0.0005
+
+# training config
+lr_scheduler: null
+nEpochs: 10        # short A/B run
+start_epoch: 0
+save_epoch: 1      # save each epoch so the 10-epoch run keeps every checkpoint
+rec_iter: 100
+logdir: ./logs
+manualSeed: 1024
+
+# loss function (vestigial: get_losses assembles Eq.13 inline; build_loss returns None)
+loss_func: consistency_loss
+losstype: null
+
+# metric
+metric_scoring: auc
+
+# cuda
+cuda: true
+cudnn: true

@@ -21,11 +21,16 @@ class pairDataset(DeepfakeAbstractBaseDataset):
         self.fake_imglist = [(img, label, 1) for img, label in zip(self.image_list, self.label_list) if label != 0]
         self.real_imglist = [(img, label, 0) for img, label in zip(self.image_list, self.label_list) if label == 0]
 
+    def _select_real(self, index):
+        """Select the real image paired with fake[index]. Base behaviour: a uniformly
+        random real (unchanged). Subclasses override this (e.g. same-source-video pairing)."""
+        real_index = random.randint(0, len(self.real_imglist) - 1)
+        return self.real_imglist[real_index]
+
     def __getitem__(self, index, norm=True):
         # Get the fake and real image paths and labels
         fake_image_path, fake_spe_label, fake_label = self.fake_imglist[index]
-        real_index = random.randint(0, len(self.real_imglist) - 1)  # Randomly select a real image
-        real_image_path, real_spe_label, real_label = self.real_imglist[real_index]
+        real_image_path, real_spe_label, real_label = self._select_real(index)
 
         # Get the mask and landmark paths for fake and real images
         fake_mask_path = fake_image_path.replace('frames', 'masks')

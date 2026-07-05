@@ -24,5 +24,7 @@ from .region_independent_loss import RegionIndependentLoss
 from .supercontrast_loss import SupConLoss
 from .vicreg_loss import VICRegLoss
 from .vicreg_loss import VarCovRegLoss
+from .vicreg_loss import AnisotropicVarCovLoss
 from .single_center_loss import SingleCenterLoss
 from .single_center_loss import OriginalSingleCenterLoss
+from .maxmin_subspace_loss import MaxMinDeviationSubspace

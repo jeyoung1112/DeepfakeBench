@@ -78,6 +78,8 @@ def prepare_training_data(config):
             )
     elif 'dataset_type' in config and config['dataset_type'] == 'pair':
         train_set = pairDataset(config, mode='train')  # Only use the pair dataset class in training
+    elif 'dataset_type' in config and config['dataset_type'] == 'video_pair':
+        train_set = videoPairDataset(config, mode='train')  # same-source-video real/fake pairing (GenD)
     elif 'dataset_type' in config and config['dataset_type'] == 'iid':
         train_set = IIDDataset(config, mode='train')
     elif 'dataset_type' in config and config['dataset_type'] == 'I2G':

@@ -55,3 +55,5 @@ from .dual_branch_scl import DualBranchSCLDetector
 from .fdfl import FDFLDetector
 from .dual_branch_scl_original import DualBranchSCLDetectorOriginal
 from .freqdebias import FreqDebiasDetector
+from .freqdebias_update import FreqDebiasUpdateDetector
+from .dual_branch_mid_detector import DualBranchMIDSDetector
