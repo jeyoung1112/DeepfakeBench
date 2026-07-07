@@ -1,0 +1,66 @@
+import logging
+import torch
+import torch.nn as nn
+from transformers import CLIPVisionModel, CLIPImageProcessor
+from peft import LoraConfig, get_peft_model
+
+logger = logging.getLogger(__name__)
+
+
+class PixelBranchPatch(nn.Module):
+
+    VARIANTS = {
+        "openai/clip-vit-base-patch16": 768,
+        "openai/clip-vit-large-patch14": 1024,
+    }
+
+    def __init__(self, config):
+        super().__init__()
+
+        model_name = config.get("clip_model_name", "openai/clip-vit-large-patch14")
+        freeze_clip = config.get("freeze_clip", False)
+
+        clip_model = CLIPVisionModel.from_pretrained(model_name)
+        vision = clip_model.vision_model
+        self.processor = CLIPImageProcessor.from_pretrained(model_name)
+        self.out_dim = self.VARIANTS[model_name]
+
+        if freeze_clip:
+            self.encoder = vision
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            self._freeze_encoder = True
+        else:
+            self._freeze_encoder = False
+            lora_config = LoraConfig(
+                r=config.get('lora_rank', 8),
+                lora_alpha=config.get('lora_alpha', 16),
+                lora_dropout=config.get('lora_dropout', 0.1),
+                target_modules=config.get('lora_targets', ['q_proj', 'v_proj']),
+                bias="none",
+            )
+            self.encoder = get_peft_model(vision, lora_config)
+            for name, param in self.encoder.named_parameters():
+                if "lora_" not in name:
+                    param.requires_grad = False
+
+        self.norm = nn.LayerNorm(self.out_dim)         # pooled CLS -> CE head
+        self.token_norm = nn.LayerNorm(self.out_dim)   # patch tokens -> geometry losses
+
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in self.parameters())
+        logger.info(f"PixelBranchPatch: {trainable:,} trainable / {total:,} total params")
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self._freeze_encoder:
+            self.encoder.eval()
+        return self
+
+    def forward(self, x, return_tokens=False):
+        outputs = self.encoder(pixel_values=x)
+        pooled = self.norm(outputs.pooler_output)
+        if return_tokens:
+            tokens = self.token_norm(outputs.last_hidden_state[:, 1:, :])  # [B, N, D], drop CLS
+            return pooled, tokens
+        return pooled

@@ -57,3 +57,4 @@ from .dual_branch_scl_original import DualBranchSCLDetectorOriginal
 from .freqdebias import FreqDebiasDetector
 from .freqdebias_update import FreqDebiasUpdateDetector
 from .dual_branch_mid_detector import DualBranchMIDSDetector
+from .dual_branch_patch import DualBranchPatch
