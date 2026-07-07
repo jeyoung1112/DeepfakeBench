@@ -57,7 +57,7 @@ nEpochs: 10
 start_epoch: 0
 save_epoch: 1
 rec_iter: 100
-manualSeed: 1024                       # NOTE: appears twice in your file; YAML keeps the last — delete one
+manualSeed: 1024                       
 save_ckpt: true
 save_feat: false
 
@@ -98,3 +98,14 @@ log_dir: './logs/mids_maxmin_s1024'    # CHANGED: encode mode+seed per run
 train_dataset: [FF-DF, FF-F2F, FF-FS]
 test_dataset: [FF-NT, Celeb-DF-v2]
 subspace_num_envs: 3   
+
+rep_weight: 0.05           # 0 disables the bilateral term
+rep_kappa: 4.0
+subspace_w_cap: 0.5
+subspace_normalize_deltas: false 
+
+# subspace_reg: maxmin
+# subspace_w_cap: 1.0                  # cap disabled (code checks < 1.0)
+# subspace_normalize_deltas: false     # raw energies, as before
+# rep_weight: 0.0                      # bilateral repulsion off
+# inv_head_weight: 0.0 

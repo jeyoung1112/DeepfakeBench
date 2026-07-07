@@ -3,31 +3,25 @@ import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from loss import LOSSFUNC
+
 logger = logging.getLogger(__name__)
 
-# try:
-#     from loss import LOSSFUNC
-#     _register = LOSSFUNC.register_module(module_name='maxmin_subspace')
-# except Exception:  # standalone execution: `python maxmin_subspace_loss.py`
-#     def _register(cls):
-#         return cls
+try:
+    from loss import LOSSFUNC
+    _register = LOSSFUNC.register_module(module_name='maxmin_subspace')
+except Exception:  # standalone execution: `python loss/maxmin_subspace_loss.py`
+    def _register(cls):
+        return cls
 
 
-@LOSSFUNC.register_module(module_name='maxmin_subspace')
+@_register
 class MaxMinDeviationSubspace(nn.Module):
-    """Manipulation-invariant deviation subspace regularizer (Method 1).
+    """Manipulation-invariant deviation subspace regularizer (Method 1), v2.
 
     Per-environment deviation matrices (unpaired; content cancels in
     expectation because FF++ fakes are derived from the same real pool):
 
         Delta_m = Sigma_m + d_m d_m^T - Sigma_r,   d_m = mu_m - mu_r
-
-    i.e. the excess second moment of manipulation-m fakes measured around
-    the real mean. A fingerprint direction of one method has ~zero deviation
-    energy under the other methods' Delta, so it is annihilated by the min;
-    only directions with positive energy in *every* environment (the shared
-    forgery component) survive.
 
     Shared subspace:   max_{U^T U = I_k}  min_m  tr(U^T Delta_m U)
 
@@ -35,18 +29,42 @@ class MaxMinDeviationSubspace(nn.Module):
 
         min_{w in simplex}  sum_of_top_k_eigvals( sum_m w_m Delta_m )
 
-    with exponentiated-gradient steps on w. Each inner iteration costs one
-    D x D eigendecomposition; the solve runs every `refresh_every` steps.
+    with exponentiated-gradient steps on w.
 
-    Training use: rotate features into the eigenbasis Q of Dbar(w*) and apply
-    the VICReg-style variance/covariance hinge ONLY to the bottom D-k
-    (content) coordinates. Real features are free to collapse along the
-    shared forgery axis (sharp low-FPR boundary) while content diversity
-    (the transfer-relevant variance) is preserved.
+    v2 solver fixes (motivated by the observed w=[0,0,0,1] absorbing-vertex
+    logs in both the full-FF++ and LOMO runs):
+
+      * COLD START. Each refresh solves its own problem from uniform w.
+        Warm-starting turned 30-iter EG into a run-long accumulator
+        (~7,000 effective iterations by mid-training); any persistent drift
+        compounded, and because EG is multiplicative, a coordinate that
+        underflowed to exactly 0 could never recover.
+      * INTERIOR FLOOR. After every EG step, w is mixed with the uniform
+        distribution so no coordinate can reach the absorbing zero state.
+      * w_cap (CVaR-style). Optional upper bound on any single
+        environment's weight, projected with an exact capped-simplex
+        projection (naive clamp-then-renormalize can push other
+        coordinates back over the cap). w_cap=1.0 recovers pure max-min;
+        w_cap=1/M forces pooled; values between interpolate.
+      * normalize_deltas. Per-environment positive-trace normalization of
+        Delta_m, so the min compares FRACTIONAL overlap ("what fraction of
+        environment m's deviation energy does U capture?") instead of raw
+        artifact energy. This is the fix for scale-heteroskedastic
+        environments: with raw energies, a weak-artifact environment (NT)
+        holds the min hostage purely by scale and the solver correctly --
+        but uselessly -- parks all weight on it. With normalization,
+        logged energies and the dual are fractions (<= 1).
+
+    Training use: rotate features into the eigenbasis Q of Dbar(w*) and
+    apply the VICReg-style variance/covariance hinge ONLY to the bottom
+    D-k (content) coordinates.
 
     mode='pooled' fixes w uniform and solves once -- the pooled baseline
     under identical moment tracking, so pooled-vs-maxmin is a one-variable
-    ablation.
+    ablation. The refresh log additionally prints the worst-environment
+    energy under the pooled basis and the maxmin-pooled gap: if the gap
+    reads ~0 for the whole run, the environments agree at this k and the
+    maxmin-vs-pooled ablation will be flat -- known before eval.
 
     Env convention: env[i] in {0..M-1} for fakes, ignored for reals
     (realness is taken from labels == 0; use -1 for reals in the dataset).
@@ -55,7 +73,8 @@ class MaxMinDeviationSubspace(nn.Module):
     def __init__(self, feat_dim, num_envs=4, k=16, gamma=1.0, eps=1e-4,
                  moment_ema=0.995, refresh_every=200, warmup_steps=500,
                  solver_iters=30, solver_lr=0.5, apply_to='real',
-                 mode='maxmin', log_refresh=True):
+                 mode='maxmin', w_cap=1.0, normalize_deltas=False,
+                 log_refresh=True):
         super().__init__()
         assert mode in ('pooled', 'maxmin')
         assert apply_to in ('real', 'all')
@@ -72,6 +91,13 @@ class MaxMinDeviationSubspace(nn.Module):
         self.apply_to = apply_to
         self.mode = mode
         self.log_refresh = log_refresh
+        self.normalize_deltas = bool(normalize_deltas)
+
+        # Feasibility: sum of M weights each <= w_cap must reach 1,
+        # so w_cap must be >= 1/M.
+        if w_cap < 1.0:
+            w_cap = max(float(w_cap), 1.0 / num_envs)
+        self.w_cap = float(w_cap)
 
         # EMA first/second moments: reals and per-manipulation fakes.
         self.register_buffer('mu_r', torch.zeros(feat_dim))
@@ -122,19 +148,72 @@ class MaxMinDeviationSubspace(nn.Module):
                     self.m2_f[m].mul_(self.moment_ema).add_(m2, alpha=a)
 
     def _deltas(self):
-        """Per-environment deviation matrices Delta_m (symmetrized)."""
+        """Per-environment deviation matrices Delta_m (symmetrized).
+
+        With normalize_deltas=True each Delta_m is divided by its positive
+        trace (sum of positive eigenvalues), so tr(U^T Delta_m U) reads as
+        the fraction of environment m's deviation energy captured by U.
+        """
         sig_r = self.m2_r - torch.outer(self.mu_r, self.mu_r)
         deltas = []
         for m in range(self.M):
             sig_m = self.m2_f[m] - torch.outer(self.mu_f[m], self.mu_f[m])
             d = self.mu_f[m] - self.mu_r
             dm = sig_m + torch.outer(d, d) - sig_r
-            deltas.append(0.5 * (dm + dm.T))
+            dm = 0.5 * (dm + dm.T)
+            if self.normalize_deltas:
+                pos = torch.linalg.eigvalsh(dm).clamp(min=0).sum()
+                dm = dm / (pos + 1e-8)
+            deltas.append(dm)
         return deltas
+
+    # ------------------------------------------------------------------
+    # Common fake axis (bilateral repulsion support)
+    # ------------------------------------------------------------------
+    def common_axis(self):
+        """Unit vector along the mean real->fake shift, averaged over the
+        initialized environments. Returns a zero vector until moments
+        exist -- callers should gate on subspace_ready (the detector does).
+        Buffers carry no grad: differentiable w.r.t. features only."""
+        if not bool(self.init_r) or not bool(self.init_f.any()):
+            return torch.zeros_like(self.mu_r)
+        d = self.mu_f[self.init_f].mean(0) - self.mu_r
+        return d / d.norm().clamp_min(1e-8)
+
+    def real_sigma_along(self, u):
+        """Std of the real distribution along direction u (for scale-free
+        repulsion margins in units of real spread)."""
+        sig_r = self.m2_r - torch.outer(self.mu_r, self.mu_r)
+        return (u @ sig_r @ u).clamp_min(1e-8).sqrt()
 
     # ------------------------------------------------------------------
     # Max-min solver (dual: EG on simplex weights, Ky Fan inner max)
     # ------------------------------------------------------------------
+    def _project_capped_simplex(self, w):
+        """Project w onto {w : sum w = 1, 0 <= w_m <= w_cap}.
+
+        Naive clamp-then-renormalize is NOT sufficient: renormalizing after
+        the clamp can push other coordinates back above the cap (e.g.
+        [0.9, .05, .05] with cap 0.5 -> clamp -> renorm -> [0.83, ...]).
+        Instead, clamp the over-cap coordinates and redistribute their
+        excess proportionally among the rest, repeating until feasible
+        (at most M rounds for M environments).
+        """
+        cap = self.w_cap
+        w = w.clone()
+        for _ in range(self.M):
+            over = w > cap + 1e-9
+            if not over.any():
+                break
+            excess = (w[over] - cap).sum()
+            w[over] = cap
+            free = ~over
+            if not free.any():
+                return torch.full_like(w, 1.0 / self.M)
+            free_mass = w[free].sum().clamp_min(1e-12)
+            w[free] = w[free] + excess * (w[free] / free_mass)
+        return w
+
     @torch.no_grad()
     def _refresh_subspace(self):
         deltas = self._deltas()
@@ -143,12 +222,13 @@ class MaxMinDeviationSubspace(nn.Module):
             return
 
         dev = self.mu_r.device
-        if self.mode == 'pooled':
-            w = torch.full((self.M,), 1.0 / self.M, device=dev)
-            iters = 1
-        else:
-            w = self.w.clone()  # warm start stabilizes Q across refreshes
-            iters = self.solver_iters
+        # COLD START: solve this refresh's problem from uniform weights.
+        # Iteration 0 therefore evaluates the pooled solution, so with
+        # best-iterate tracking, maxmin's dual is never worse than pooled's
+        # on the same deltas. Q-stability across refreshes comes from the
+        # slow moment EMA, not from warm-starting w.
+        w = torch.full((self.M,), 1.0 / self.M, device=dev)
+        iters = 1 if self.mode == 'pooled' else self.solver_iters
 
         best_dual, best_w, best_evecs = float('inf'), None, None
         for _ in range(iters):
@@ -167,6 +247,13 @@ class MaxMinDeviationSubspace(nn.Module):
             g = g / (g.abs().max() + 1e-12)
             w = w * torch.exp(-self.solver_lr * g)
             w = w / w.sum()
+            # INTERIOR FLOOR: EG is multiplicative, so exact zeros are
+            # absorbing states. Keep every coordinate >= floor.
+            floor = 1e-3
+            w = (1.0 - self.M * floor) * w + floor
+            # Optional CVaR-style cap on any single environment's vote.
+            if self.w_cap < 1.0:
+                w = self._project_capped_simplex(w)
 
         self.Q.copy_(best_evecs)
         self.w.copy_(best_w)
@@ -175,12 +262,28 @@ class MaxMinDeviationSubspace(nn.Module):
         if self.log_refresh:
             U = best_evecs[:, -self.k:]
             e = [float((U * (deltas[m] @ U)).sum()) for m in range(self.M)]
-            logger.info(
-                f"[maxmin_subspace step={int(self.step)}] mode={self.mode} "
-                f"dual={best_dual:.4f} w={[round(float(x), 3) for x in best_w]} "
-                f"per-env shared energy={[round(x, 4) for x in e]} "
-                f"min={min(e):.4f}"
-            )
+            msg = (f"[maxmin_subspace step={int(self.step)}] mode={self.mode} "
+                   f"norm={self.normalize_deltas} "
+                   f"dual={best_dual:.4f} "
+                   f"w={[round(float(x), 3) for x in best_w]} "
+                   f"per-env shared energy={[round(x, 4) for x in e]} "
+                   f"min={min(e):.4f}")
+            if self.mode == 'maxmin':
+                # Live maxmin-vs-pooled differentiation: the worst
+                # environment's energy under the POOLED (uniform) basis.
+                # gap ~ 0 for the whole run => environments agree at this k
+                # and the maxmin-vs-pooled ablation will be flat.
+                dbar_u = torch.zeros_like(deltas[0])
+                for dm in deltas:
+                    dbar_u += dm
+                dbar_u /= self.M
+                _, Vu = torch.linalg.eigh(dbar_u)
+                Up = Vu[:, -self.k:]
+                pooled_min = min(float((Up * (dm @ Up)).sum())
+                                 for dm in deltas)
+                msg += (f" | pooled_min={pooled_min:.4f} "
+                        f"gap={min(e) - pooled_min:+.4f}")
+            logger.info(msg)
             if min(e) <= 0:
                 logger.warning(
                     '[maxmin_subspace] min shared energy <= 0: no k-dim '
@@ -257,10 +360,9 @@ class MaxMinDeviationSubspace(nn.Module):
 
 
 if __name__ == '__main__':
-    # Synthetic self-test: plant a shared forgery direction pair plus one
-    # dominant per-env fingerprint. Pooled should lock onto the dominant
-    # fingerprint (large principal angle to the planted shared dirs);
-    # maxmin should recover the shared dirs (small angle).
+    # --- Regression test (must not break): planted shared dirs + one
+    # dominant per-env fingerprint. Pooled locks onto the fingerprint
+    # (angles near 90); maxmin recovers the shared dirs (angles near 0).
     torch.manual_seed(0)
     D, k, M, n = 64, 2, 3, 4000
     shared = torch.linalg.qr(torch.randn(D, k))[0]
@@ -290,5 +392,30 @@ if __name__ == '__main__':
         print(f"{mode:6s} | principal angles to planted shared dirs: "
               f"{[round(float(a), 1) for a in ang]} | "
               f"w = {[round(float(x), 3) for x in loss.w]}")
+        if mode == 'maxmin':
+            assert float(loss.w.min()) > 0, \
+                'interior floor failed: absorbing zero in w'
     print("expected: pooled angles near 90 (fingerprint captured), "
           "maxmin angles near 0 (shared recovered)")
+
+    # --- v2 machinery smoke test: floor + capped projection under
+    # normalize_deltas. NOTE: no angle assertion here. Per-env trace
+    # normalization makes the shared directions' energies UNEQUAL across
+    # environments in this synthetic (env 0's shared fraction is diluted
+    # by its huge fingerprint), so extraction near the dual optimum can
+    # tie-break between shared and fingerprint directions. The
+    # normalization's target regime is scale-heteroskedastic real data
+    # (the NT-hostage failure), not this fingerprint-dominance synthetic;
+    # watch the per-env energy / gap logs on real runs instead.
+    loss = MaxMinDeviationSubspace(
+        D, num_envs=M, k=k, warmup_steps=0, refresh_every=1,
+        moment_ema=0.0, mode='maxmin', normalize_deltas=True, w_cap=0.6)
+    loss.train()
+    loss(X, y, e)
+    assert float(loss.w.min()) > 0, 'interior floor failed under norm+cap'
+    assert float(loss.w.max()) <= 0.6 + 1e-6, 'capped-simplex projection failed'
+    s = torch.linalg.svdvals(shared.T @ loss.U).clamp(-1.0, 1.0)
+    ang = torch.rad2deg(torch.acos(s))
+    print(f"norm+cap | angles: {[round(float(a), 1) for a in ang]} | "
+          f"w = {[round(float(x), 3) for x in loss.w]} "
+          f"(floor/cap verified)")

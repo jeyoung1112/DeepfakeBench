@@ -2,6 +2,7 @@ import logging
 import torch
 import torch.nn as nn
 from metrics.base_metrics_class import calculate_metrics_for_train
+import torch.nn.functional as F
 
 from networks.pixel_branch import PixelBranch
 from networks.frequency_branch import FrequencyBranch
@@ -59,6 +60,8 @@ class DualBranchMIDSDetector(AbstractDetector):
         # discriminative ("route detection through S*"). Keep 0.0 for the
         # first pooled-vs-maxmin comparison; enable as a second phase.
         self.inv_head_weight = config.get('inv_head_weight', 0.0)
+        self.rep_weight = config.get('rep_weight', 0.0)
+        self.rep_kappa = config.get('rep_kappa', 4.0)
         self.inv_head = None
         if self.subspace_loss is not None and self.inv_head_weight > 0:
             self.inv_head = nn.Linear(config.get('subspace_k', 16), num_classes)
@@ -245,6 +248,18 @@ class DualBranchMIDSDetector(AbstractDetector):
                 inv_loss = self.loss_func(self.inv_head(z), label)
                 losses['inv_head'] = inv_loss
                 overall = overall + self.inv_head_weight * inv_loss
+            
+            if self.rep_weight > 0 and bool(self.subspace_loss.subspace_ready):
+                u = self.subspace_loss.common_axis().to(feat.dtype)      # buffers: no grad to u
+                s = (feat - self.subspace_loss.mu_r.to(feat.dtype)) @ u
+                margin = self.rep_kappa * self.subspace_loss.real_sigma_along(u)
+                fake = s[label == 1]
+                if fake.numel() > 0:
+                    rep = F.relu(margin - fake).mean()
+                    losses['rep'] = rep
+                    losses['rep_active'] = (fake < margin).float().mean().detach()
+                    overall = overall + self.rep_weight * rep
+
         else:
             tgt = feat[label == 0] if self.real_only else feat
             if tgt.size(0) > 1 and tgt.size(1) > 0:
