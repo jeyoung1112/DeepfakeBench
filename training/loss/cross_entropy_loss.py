@@ -5,9 +5,9 @@ from metrics.registry import LOSSFUNC
 
 @LOSSFUNC.register_module(module_name="cross_entropy")
 class CrossEntropyLoss(AbstractLossClass):
-    def __init__(self):
+    def __init__(self, label_smoothing=0.0):
         super().__init__()
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     def forward(self, inputs, targets):
         """
