@@ -1,6 +1,12 @@
+# ============================================================================
+# Fishr variant of dualbranchpatch — Fishr ON (whole FF++ -> cross-dataset).
+# IDENTICAL to dualbranchpatch.yaml except `fishr_weight` (0.0 -> 1.0).
+# Keep the two files in sync if you change any shared hyperparameter.
+# A/B partner (baseline): dualbranchpatch.yaml
+# ============================================================================
 
-model_name: dual_branch_patch      
-mode: dual                         
+model_name: dual_branch_patch_update
+mode: dual
 
 # ---------------- Pixel Branch (LoRA-CLIP) ----------------
 clip_model_name: openai/clip-vit-large-patch14
@@ -33,28 +39,32 @@ head_dropout: 0.3
 # ==================== Losses ====================
 loss_func: cross_entropy
 
-# --- Patch-level real-only center loss (NEW; replaces the global SCL) ---
+# --- Patch-level real-only center loss ---
 patch_center_weight: 0.1
 scl_ema_tau: 0.99          # EMA momentum for the patch center (key reused by patch_center)
 
-# --- Per-patch variance-covariance (collapse guard; thesis-tuned, RE-TUNE at patch grain) ---
+# --- Per-patch variance-covariance (collapse guard) ---
 var_weight: 5.0
 cov_weight: 0.1
 
-# --- Cross-manipulation invariance via Fishr (toggle: 0 = baseline, >0 = Fishr on) ---
+# --- Cross-manipulation invariance via Fishr (ON) ---
 # Domains = FF++ manipulation ids from data_dict['env'] (DF=0 F2F=1 FS=2 NT=3).
-fishr_weight: 0.0          # baseline when 0; after warmup ramp up (try 1 -> 10 -> 100) and tune against the logged fishr/grad_var_dist
+# fishr_weight: 1.0          # Fishr ON; tune 1 -> 10 -> 100 against the logged fishr/grad_var_dist
 fishr_warmup: 1500         # optimizer steps of CE+geometry before the penalty is added (EMA warms during this window)
-fishr_gamma: 0.99          # EMA momentum for per-env gradient variance (lower => stronger per-step gradient, noisier)
-fishr_envs: [0, 1, 2, 3]   # fake manipulation env ids used as domains (use [0,1,2] for a 3-way LOMO split)
+fishr_gamma: 0.95         # EMA momentum for per-env gradient variance (lower => stronger per-step gradient, noisier)
+fishr_envs: [0, 1, 2, 3]   # all 4 FF++ manipulation env ids as domains
+
+fishr_ramp: 500              # 0 = official hard onset (then reset Adam in the trainer)
+fishr_ema_correction: true   # official one-minus-ema correction; changes lambda scale (see above)
+fishr_weight: 5.0          # re-anchored: old 100 / ~20; sweep {1, 5, 10}
 
 # --- Legacy / inert in the patch path (kept only for build_loss compatibility) ---
-scl_weight: 0              # global SCL not applied in the patch path; patch_center supersedes it
-varcov_real_only: false    # patch path is always real-only internally
-aniso_varcov: false        # anisotropic var-cov is NOT wired into the patch loss
+scl_weight: 0
+varcov_real_only: false
+aniso_varcov: false
 
 # ==================== Diagnostics ====================
-diag_log_every: 500        # steps between patch/feature variance logs
+diag_log_every: 500
 
 # ==================== Optimizer ====================
 optimizer:
@@ -79,11 +89,11 @@ save_feat: false
 # ==================== Data ====================
 batchSize: 32
 frame_num: {'train': 32, 'test': 32}
-resolution: 224            # CLIP ViT-L/14 input
-clip_grid: 16              # NEW: patch grid side; MUST equal resolution / patch_size (224 / 14 = 16)
+resolution: 224
+clip_grid: 16              # patch grid side; MUST equal resolution / patch_size (224 / 14 = 16)
 
 train_dataset: ['FaceForensics++']
-test_dataset: ['Celeb-DF-v2', 'DFDC', 'DFDCP', 'DeepfakeDetection']   # cross-dataset generalization eval (was ['FaceForensics++'])
+test_dataset: ['Celeb-DF-v2']   # cross-dataset generalization eval
 compression: 'c23'
 train_batchSize: 32
 test_batchSize: 32

@@ -13,6 +13,64 @@ from loss import LOSSFUNC
 
 logger = logging.getLogger(__name__)
 
+class FishrLoss(nn.Module):
+    def __init__(self, envs, feat_dim, num_classes, gamma=0.99,
+                 oneminusema_correction=True):
+        super().__init__()
+        self.envs = [int(e) for e in envs]
+        self.gamma = float(gamma)
+        self.correction = bool(oneminusema_correction)
+        P = feat_dim * num_classes + num_classes          # W + b of the final Linear
+        self.num_classes = num_classes
+        # persistent buffers: running per-env gradient variance survives checkpointing
+        self.register_buffer('ema', torch.zeros(len(self.envs), P))
+        self.register_buffer('ema_init', torch.zeros(len(self.envs), dtype=torch.bool))
+        self._env2idx = {e: i for i, e in enumerate(self.envs)}
+ 
+    @torch.no_grad()
+    def _sanity(self, g):
+        if g.size(1) != self.ema.size(1):
+            raise RuntimeError(
+                f"FishrLoss dim mismatch: got per-sample grads of dim {g.size(1)}, "
+                f"buffers built for {self.ema.size(1)}. Rebuild FishrLoss if the "
+                f"head's final Linear changed shape.")
+ 
+    def forward(self, hidden, logits, label, env):
+        """hidden: [B,H] penultimate activation that PRODUCED logits (same dropout
+        mask); logits: [B,C]; label: [B]; env: [B] ints (ids not in `envs`, e.g.
+        real=-1 / unmapped=-2, are ignored). Returns (penalty | None, present)."""
+        # float32 for numerically stable variances of small gradients under AMP
+        a = hidden.float()
+        p = torch.softmax(logits.float(), dim=1)
+        resid = p - F.one_hot(label, num_classes=self.num_classes).float()   # [B,C]
+        g = torch.cat([torch.einsum('bc,bh->bhc', resid, a).reshape(a.size(0), -1),
+                       resid], dim=1)                                        # [B,P]
+        self._sanity(g)
+ 
+        vals, present = [], []
+        for e in self.envs:
+            m = (env == e)
+            if int(m.sum()) < 2:                       # variance needs >= 2 samples
+                continue
+            ge = g[m]
+            v = (ge - ge.mean(dim=0, keepdim=True)).pow(2).mean(dim=0)       # [P] biased var
+            idx = self._env2idx[e]
+            if bool(self.ema_init[idx]):
+                v_ema = self.gamma * self.ema[idx] + (1.0 - self.gamma) * v  # grad via (1-g)*v
+            else:
+                v_ema = v                              # first observation seeds the EMA
+                self.ema_init[idx] = True
+            self.ema[idx] = v_ema.detach()             # persist running estimate
+            if self.correction:
+                v_ema = v_ema / (1.0 - self.gamma)     # official one-minus-ema correction
+            vals.append(v_ema)
+            present.append(e)
+ 
+        if len(present) < 2:
+            return None, present
+        V = torch.stack(vals, 0)                       # [E_present, P]
+        penalty = ((V - V.mean(dim=0, keepdim=True)) ** 2).mean()   # l2_between_dicts form
+        return penalty, present
 
 class PatchRealCenterLoss(nn.Module):
     """Real-only center loss at patch granularity: cosine attraction of every
@@ -36,17 +94,59 @@ class PatchRealCenterLoss(nn.Module):
         if real.numel() == 0:
             return tokens.sum() * 0.0
         real = real.reshape(-1, real.size(-1))        # [Br*N, D] — all authentic
-        if self.training:                             # eval batches must not move the center
-            self._update(real.detach())
+        self._update(real.detach())
         c = F.normalize(self.center, dim=0)
         return (1 - F.normalize(real, dim=1) @ c).mean()
 
+class PositionalRealCenterLoss(nn.Module):
+    """Real-only center loss with ONE EMA center PER GRID POSITION.
+ 
+    A single global center treats 'authentic' as one point, but an authentic
+    eye patch and an authentic background patch differ far more from each other
+    than a fake patch differs from a real one at the SAME location — the
+    within-real regional variance swamps the forgery deviation (observed as a
+    patch_dist gap sitting at ~0). Landmark-aligned face crops make grid
+    position ~ facial region, so conditioning the center on position removes
+    that variance. Fakes stay unconstrained (asymmetric design), and the
+    per-patch var-cov term remains GLOBAL across positions, so the two
+    objectives do not fight."""
+ 
+    def __init__(self, feat_dim, num_positions, ema_tau=0.99):
+        super().__init__()
+        self.tau = ema_tau
+        self.register_buffer('center', torch.zeros(num_positions, feat_dim))
+        self.register_buffer('initialized', torch.tensor(False))
+ 
+    @torch.no_grad()
+    def _update(self, real_tokens):                   # [Br, N, D]
+        m = real_tokens.float().mean(0)               # [N, D] per-position batch mean
+        if not self.initialized:
+            self.center.copy_(m); self.initialized.fill_(True)
+        else:
+            self.center.mul_(self.tau).add_(m, alpha=1 - self.tau)
+ 
+    def distances(self, tokens):
+        """Cosine distance of every patch to ITS position's center. [B, N]."""
+        c = F.normalize(self.center.float(), dim=-1).to(tokens.dtype)  # [N, D]
+        t = F.normalize(tokens, dim=-1)                                 # [B, N, D]
+        return 1 - (t * c.unsqueeze(0)).sum(-1)                         # [B, N]
+ 
+    def forward(self, tokens, label):                 # tokens [B, N, D], label [B]
+        if tokens.size(1) != self.center.size(0):
+            raise RuntimeError(
+                f"PositionalRealCenterLoss: got {tokens.size(1)} patch positions, "
+                f"buffers built for {self.center.size(0)}; check clip_grid**2 == N.")
+        real = tokens[label == 0]                     # [Br, N, D]
+        if real.numel() == 0:
+            return tokens.sum() * 0.0
+        self._update(real.detach())
+        return self.distances(real).mean()
 
-@DETECTOR.register_module(module_name='dual_branch_patch')
-class DualBranchPatch(AbstractDetector):
+@DETECTOR.register_module(module_name='dual_branch_patch_update')
+class DualBranchPatchUpdate(AbstractDetector):
     """Dual-branch (LoRA-CLIP + FFT-ResNet) detector with a patch-level
     real-only center loss, per-patch var-cov, and an optional cross-manipulation
-    invariance penalty"""
+    invariance penalty. Requires dual mode (both branches present)."""
 
     def __init__(self, config):
         super().__init__(config)
@@ -79,45 +179,40 @@ class DualBranchPatch(AbstractDetector):
         self.var_weight = config.get('var_weight', 0.04)
         self.cov_weight = config.get('cov_weight', 0.01)
         self.real_only  = config.get('varcov_real_only', False)
-        # pooled-feature collapse guard: same var/cov hinge, applied to the real rows
-        # of the fused vector that feeds the head (diagnostics showed real_feat_var
-        # 0.37->0.02 and eff_rank->1 while patch-token rank stayed healthy)
-        self.pooled_var_weight = config.get('pooled_var_weight', 0.0)
-        self.pooled_cov_weight = config.get('pooled_cov_weight', 0.0)
-        # separate instance so the pooled hinge target (std >= gamma) is tunable
-        # independently of the patch-level guard (healthy pooled real std was ~0.6)
-        self.pooled_varcov = LOSSFUNC['varcov'](
-            gamma=config.get('pooled_var_gamma', 1.0))
 
         # patch path
         self.grid = config.get('clip_grid', 16)                 # clip_input_size // patch_size
         self.freq_tok_norm = nn.LayerNorm(freq_map_dim) if freq_map_dim else None
+        # variant = config.get('patch_center_variant', 'positional')
+        # if variant == 'positional':
+        #     self.patch_center = PositionalRealCenterLoss(
+        #         feat_dim=patch_dim, num_positions=self.grid * self.grid,
+        #         ema_tau=config.get('scl_ema_tau', 0.99))
+        # else:                                          # 'global' — previous behavior
+        #     self.patch_center = PatchRealCenterLoss(
+        #         feat_dim=patch_dim, ema_tau=config.get('scl_ema_tau', 0.99))
+        # self.patch_center_weight = config.get('patch_center_weight', 0.1)
         self.patch_center = PatchRealCenterLoss(
             feat_dim=patch_dim, ema_tau=config.get('scl_ema_tau', 0.99))
         self.patch_center_weight = config.get('patch_center_weight', 0.1)
 
         # --- Fishr cross-manipulation invariance (toggle: 0 = baseline, >0 = Fishr on) ---
-        # Matches the per-env variance of per-sample gradients of the final Linear
-        # (head[-1]); domains are the FF++ manipulation ids in data_dict['env'].
+        # Official-faithful module (Rame et al., ICML 2022) in loss/fishr.py; scope =
+        # final Linear (head[-1]); domains are the FF++ manipulation ids in data_dict['env'].
         self.fishr_weight = config.get('fishr_weight', 0.0)
         self.fishr_warmup = config.get('fishr_warmup', 1500)
-        self.fishr_gamma  = config.get('fishr_gamma', 0.99)
-        # relative (scale-invariant) variant: match variance RATIOS (v_e - vbar)/vbar
-        # instead of raw deviations, so the penalty cannot decay to zero just because
-        # gradient magnitudes shrink as CE converges (observed: 0.5 -> 2e-4).
-        self.fishr_relative = config.get('fishr_relative', False)
-        self.fishr_rel_eps  = config.get('fishr_rel_eps', 1e-8)
-        self.fishr_rel_floor = config.get('fishr_rel_floor', 1e-3)
-        self.fishr_unbiased = config.get('fishr_unbiased', False)
-        self.label_smoothing = config.get('label_smoothing', 0.0)
-        self._warned_no_env = False
-        self.fishr_envs   = list(config.get('fishr_envs', [0, 1, 2, 3]))
-        self._env2idx     = {e: i for i, e in enumerate(self.fishr_envs)}
-        _head_out = self.head[-1]                                  # final Linear (H -> C)
-        fishr_P   = _head_out.weight.numel() + _head_out.bias.numel()
-        self.register_buffer('fishr_ema', torch.zeros(len(self.fishr_envs), fishr_P))
-        self.register_buffer('fishr_ema_init',
-                             torch.zeros(len(self.fishr_envs), dtype=torch.bool))
+        self.fishr_ramp   = config.get('fishr_ramp', 500)   # 0 = official hard onset (pair with an IRM-style Adam reset in the trainer)
+        _head_out = self.head[-1]                            # final Linear (H -> C)
+        self.fishr = FishrLoss(
+            envs=config.get('fishr_envs', [0, 1, 2, 3]),
+            feat_dim=_head_out.in_features,
+            num_classes=_head_out.out_features,
+            gamma=config.get('fishr_gamma', 0.99),
+            oneminusema_correction=config.get('fishr_ema_correction', True),
+        )
+        # counts TRAINING calls only; eval also runs get_losses, and official Fishr
+        # counts optimizer update steps for its anneal schedule
+        self._train_step = 0
 
         # diagnostics
         self._diag_step = 0
@@ -153,10 +248,7 @@ class DualBranchPatch(AbstractDetector):
 
     def build_loss(self, config, fused_dim):
         cls_loss_class = LOSSFUNC[config.get('loss_func', 'cross_entropy')]
-        # label smoothing keeps per-sample CE gradients (p - y_smooth) bounded away
-        # from zero as training converges -- required for Fishr to have signal late.
-        ls = config.get('label_smoothing', 0.0)
-        cls_loss = cls_loss_class(label_smoothing=ls) if ls > 0 else cls_loss_class()
+        cls_loss = cls_loss_class()
 
         scl_loss = None
         if config.get('scl_weight', 0) > 0:
@@ -277,6 +369,8 @@ class DualBranchPatch(AbstractDetector):
     def get_losses(self, data_dict: dict, pred_dict: dict) -> dict:
         label = data_dict['label']
 
+        if self.training:
+            self._train_step += 1
         self._diag_step += 1
         do_diag = (self._diag_step % self._diag_log_every == 0)
 
@@ -299,75 +393,24 @@ class DualBranchPatch(AbstractDetector):
             losses['patch_var'], losses['patch_cov'] = pv, pcv
             overall = overall + self.var_weight * pv + self.cov_weight * pcv
 
-        # pooled-feature variance-covariance on real samples (head-input collapse
-        # guard; the patch-level term above does not protect the fused vector)
-        if self.pooled_var_weight > 0 or self.pooled_cov_weight > 0:
-            real_pooled = pred_dict['feat'][label == 0]
-            if real_pooled.size(0) > 1:
-                fv, fc = self.pooled_varcov(real_pooled)
-                losses['pooled_var'], losses['pooled_cov'] = fv, fc
-                overall = overall + self.pooled_var_weight * fv \
-                                  + self.pooled_cov_weight * fc
-
-        # self.training gate: keeps eval batches (which can carry FF++ env ids when
-        # testing in-domain) from updating the EMA or adding a penalty at test time.
-        if self.fishr_weight > 0 and self.training:
-            if 'env' not in data_dict:
-                if not self._warned_no_env:
-                    logger.warning(
-                        "fishr_weight > 0 but data_dict has no 'env' key -- Fishr is "
-                        "INACTIVE this run. Check the dataset provides env "
-                        "(DeepfakeAbstractBaseDataset does; pair/blend datasets do not).")
-                    self._warned_no_env = True
-            else:
-                env = data_dict['env']
-                a = pred_dict['cls_feat']                          # [B,H] penultimate (shared-mask)
-                p = torch.softmax(pred_dict['cls'], dim=1)         # [B,C]
-                # exact d(smoothed-CE)/d(logits) = p - y_smooth. Using p - onehot here
-                # would be wrong under smoothing: for the weight coords the offset
-                # multiplies the per-sample activation a_h, so it does NOT cancel in
-                # the centered per-env variance (only the bias coords are invariant).
-                y_soft = F.one_hot(label, p.size(1)).to(p.dtype)
-                if self.label_smoothing > 0:
-                    y_soft = (1 - self.label_smoothing) * y_soft \
-                             + self.label_smoothing / p.size(1)
-                resid = p - y_soft                                 # [B,C]
-                g = torch.cat([torch.einsum('bc,bh->bhc', resid, a).reshape(a.size(0), -1),
-                               resid], dim=1)                      # per-sample grad [B, H*C+C]
-                ema_vals, present = [], []
-                for e in self.fishr_envs:
-                    m = (env == e)
-                    if int(m.sum()) >= 2:                          # variance needs >=2 samples
-                        idx = self._env2idx[e]
-                        v_live = g[m].var(dim=0, unbiased=self.fishr_unbiased)  # [P], carries grad
-                        if bool(self.fishr_ema_init[idx]):
-                            v_ema = self.fishr_gamma * self.fishr_ema[idx] \
-                                    + (1 - self.fishr_gamma) * v_live
-                        else:
-                            v_ema = v_live                         # first obs: seed the EMA
-                            self.fishr_ema_init[idx] = True
-                        self.fishr_ema[idx] = v_ema.detach()       # persist running estimate
-                        ema_vals.append(v_ema); present.append(e)
-                # penalty added only after warmup (EMA still warms during it), >=2 envs
-                if len(present) >= 2 and self._diag_step >= self.fishr_warmup:
-                    V = torch.stack(ema_vals, 0)                   # [E, P]
-                    v_bar = V.mean(0, keepdim=True)
-                    dev = V - v_bar
-                    if self.fishr_relative:
-                        # scale-invariant: penalize variance RATIOS so the penalty
-                        # stays O(1) as gradient magnitudes shrink with convergence.
-                        # Denominator floored at a fraction of the mean variance so
-                        # near-zero (noisiest) coords cannot blow up the gradient.
-                        vb = v_bar.detach()
-                        floor = self.fishr_rel_floor * vb.mean() + self.fishr_rel_eps
-                        dev = dev / (vb + floor)
-                    fishr = (dev ** 2).sum(1).mean()
-                    losses['fishr'] = fishr
-                    overall = overall + self.fishr_weight * fishr
+        # cross-manipulation invariance via Fishr (Rame et al., ICML 2022) — official-
+        # faithful module in loss/fishr.py. Domains are the fake manipulation ids in
+        # data_dict['env'] (real=-1, DF/F2F/FS/NT=0..3, -2=unmapped fake -> ignored:
+        # neither id is listed in fishr_envs). The penalty is computed every step so
+        # the per-env EMA warms during warmup; it is only WEIGHTED after warmup,
+        # ramping linearly over fishr_ramp steps (0 = official hard onset).
+        if self.fishr_weight > 0 and 'env' in data_dict:
+            fishr_pen, present = self.fishr(
+                pred_dict['cls_feat'], pred_dict['cls'], label, data_dict['env'])
+            if fishr_pen is not None:
+                losses['fishr'] = fishr_pen
+                if self._train_step >= self.fishr_warmup:
+                    frac = 1.0 if self.fishr_ramp <= 0 else min(
+                        1.0, (self._train_step - self.fishr_warmup + 1) / self.fishr_ramp)
+                    overall = overall + self.fishr_weight * frac * fishr_pen
                     if do_diag:
-                        logger.info(f"  fishr/grad_var_dist: {fishr.item():.4e}  "
-                                    f"relative: {self.fishr_relative}  "
-                                    f"envs_present: {present}")
+                        logger.info(f"  fishr/grad_var_dist: {fishr_pen.item():.4e}  "
+                                    f"envs_present: {present}  w_frac: {frac:.2f}")
 
         losses['overall'] = overall
 
