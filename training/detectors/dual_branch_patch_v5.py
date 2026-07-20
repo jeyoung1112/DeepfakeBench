@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 
 from networks.pixel_branch_patch_v5 import PixelBranchPatchV5
+from networks.pixel_branch_dino_v5 import PixelBranchDINOv5
 from networks.frequency_branch_patch import FrequencyBranchPatch
 
 from detectors import DETECTOR
@@ -41,7 +42,14 @@ class DualBranchPatchV5(DualBranchPatch):
         pixel_branch, freq_branch = None, None
         mode = config.get("mode", "dual")
         if mode in ('dual', 'pixel_only'):
-            pixel_branch = PixelBranchPatchV5(config)
+            pixel_type = config.get("pixel_backbone", "clip")
+            if pixel_type == "clip":
+                pixel_branch = PixelBranchPatchV5(config)
+            elif pixel_type == "dino":
+                pixel_branch = PixelBranchDINOv5(config)
+            else:
+                raise ValueError(f"unknown pixel_backbone: {pixel_type} "
+                                "(must be 'clip' or 'dino')")
         if mode == 'dual':
             freq_branch = FrequencyBranchPatch(config)
         return pixel_branch, freq_branch
