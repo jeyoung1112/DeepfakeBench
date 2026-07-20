@@ -1,0 +1,131 @@
+# ============================================================================
+# v5 RUN C — pixel_only ablation (freq-branch go/no-go), LoRA adapter.
+# Targets the logged pooled-feature rank collapse at its cause (LoRA spectral
+# collapse, arXiv 2411.15633); the losing pooled var/cov guard is DISABLED.
+# Fishr stays vanilla w=100 (our operating point) -> the matched ablation
+# "SVD backbone alone vs SVD backbone + Fishr" is this config vs fishr_weight 0.
+# Ablation partner (Run C, pixel_only LoRA): dualbranchpatch_v5_px.yaml
+# ============================================================================
+
+model_name: dual_branch_patch_v5
+mode: pixel_only
+
+# ---------------- Pixel Branch (CLIP + adapter axis) ----------------
+clip_model_name: openai/clip-vit-large-patch14
+adapter_type: lora       # keep LoRA: single-change ablation vs the dual winner
+svd_rank_keep: 1023        # freeze top-1023 singular comps; train rank-1 residual
+svd_ortho_weight: 0.0
+# (lora_* keys ignored under adapter_type: svd)
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.1
+lora_targets: ['q_proj', 'v_proj']
+
+## CLIP normalization
+mean: [0.48145466, 0.4578275, 0.40821073]
+std:  [0.26862954, 0.26130258, 0.27577711]
+
+# ---------------- Frequency Branch (FFT) ----------------
+freq_backbone: resnet18
+freq_backbone_name: resnet18_freq
+freq_backbone_config:
+  inc: 6
+  num_classes: 512
+freq_out_dim: 512
+fft_log_scale: true
+sr_type: null
+
+# ---------------- Classification head ----------------
+backbone_config:
+  num_classes: 2
+head_hidden_dim: 256
+head_dropout: 0.3
+
+# ==================== Losses ====================
+loss_func: cross_entropy
+label_smoothing: 0.1
+
+patch_center_weight: 0.1
+scl_ema_tau: 0.99
+
+var_weight: 5.0
+cov_weight: 0.1
+
+# pooled guard OFF: SVD-residual attacks the collapse cause; guard was losing
+pooled_var_weight: 0.0
+pooled_cov_weight: 0.0
+pooled_var_gamma: 1.0
+
+# --- Fishr (vanilla winner recipe) ---
+fishr_weight: 0.003
+fishr_relative: true
+fishr_rel_eps: 1.0e-8
+fishr_rel_floor: 0.001
+fishr_unbiased: true
+fishr_warmup: 1500
+fishr_gamma: 0.99
+fishr_envs: [0, 1, 2, 3]
+
+scl_weight: 0
+varcov_real_only: false
+aniso_varcov: false
+
+# ==================== Diagnostics ====================
+diag_log_every: 500
+
+# ==================== Optimizer ====================
+optimizer:
+  type: adam
+  adam:
+    lr: 0.0001
+    beta1: 0.9
+    beta2: 0.999
+    eps: 0.00000001
+    weight_decay: 0.0005
+    amsgrad: false
+
+lr_scheduler: null
+nEpochs: 5
+start_epoch: 0
+save_epoch: 1
+rec_iter: 100
+logdir: ./logs
+save_ckpt: true
+save_feat: false
+
+# ==================== Data ====================
+batchSize: 32
+frame_num: {'train': 32, 'test': 32}
+resolution: 224
+clip_grid: 16
+
+train_dataset: ['FaceForensics++']
+test_dataset: ['Celeb-DF-v2']
+compression: 'c23'
+train_batchSize: 32
+test_batchSize: 32
+workers: 8
+manualSeed: 1024
+with_mask: false
+with_landmark: false
+
+# ---- Data Augmentation (base q40 -- unconfounded with the q30 wave) ----
+use_data_augmentation: true
+data_aug:
+  flip_prob: 0.5
+  rotate_prob: 0.5
+  rotate_limit: 10
+  blur_prob: 0.5
+  blur_limit: 7
+  brightness_prob: 0.5
+  brightness_limit: 0.1
+  contrast_limit: 0.1
+  quality_lower: 40
+  quality_upper: 100
+
+metric_scoring: auc
+
+cuda: true
+cudnn: true
+
+log_dir: './logs/dual_branch_patch'
