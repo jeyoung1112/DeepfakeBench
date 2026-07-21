@@ -1,33 +1,10 @@
 model_name:
-  # - clip_simple_lora_dfdcp
-  # - dino_lora_dfdcp
-  # - spsl_dfdcp
-  # - recce_dfdcp
-  # - dual_scl_varcov_2
-  # - dual_scl_cov_0.02
-  # - dual_scl_cov_0.04
-  # - dual_scl_cov_0.08
-  # - dual_scl_cov_0.1
-  # - dual_scl_cov_0.25
-  # - dual_scl_cov_0.5
-  # - xception_decorr_linear
-  - xception_csica
+  - dual_patch
 
 
 detector_path:
-  # - ./training/config/detector/clip_simple_lora.yaml
-  # - ./training/config/detector/dino_lora.yaml
-  # - ./training/config/detector/spsl.yaml
-  # - ./training/config/detector/recce_dfdcp.yaml
-  # - ./training/config/detector/dual_branch.yaml
-  # - ./training/config/detector/dual_branch.yaml
-  # - ./training/config/detector/dual_branch.yaml
-  # - ./training/config/detector/dual_branch_scl.yaml
-  # - ./training/config/detector/dual_branch_scl.yaml
-  # - ./training/config/detector/dual_branch_scl.yaml
-  # - ./training/config/detector/dual_branch_scl.yaml
-  # - ./training/config/detector/dual_branch_scl.yaml
-  - ./training/config/detector/xception_lpsnd.yaml
+
+  - ./training/config/detector/dualbranchpatch.yaml
 
 
 test_dataset:
@@ -38,19 +15,8 @@ test_dataset:
   - "DeepFakeDetection"
 
 weights_path:
-
-  # - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/clip_lora_dfdcp_ckpt_best.pth   
-  # - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/dino_lora_dfdcp_ckpt_best.pth   
-  # - /media/NAS/USERS/jeyoung/checkpoints/FF_trained/spsl_dfdcp_ckpt_best.pth   
-  # - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-05-01-07-23-50/test/FaceForensics++/ckpt_best.pth
-  # - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-05-01-20-12-44/test/FaceForensics++/ckpt_best.pth
-  # - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-05-02-09-01-46/test/FaceForensics++/ckpt_best.pth
-  # - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-05-02-21-51-20/test/FaceForensics++/ckpt_best.pth
-  # - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-05-04-01-47-54/test/FaceForensics++/ckpt_best.pth
-  # - /home/jeyoung/personal/DeepfakeBench/logs/training/dual_branch_scl_2026-05-04-14-38-34/test/FaceForensics++/ckpt_best.pth
-  # - /home/jeyoung/personal/DeepfakeBench/logs/training/xception_spec_decorr_2026-05-10-15-34-58/test/FaceForensics++/ckpt_best.pth
-  - /home/jeyoung/personal/DeepfakeBench/logs/training/xception_lpsnd_2026-05-13-08-36-23/test/FaceForensics++/ckpt_best.pth
+  - /home/jeyoung/DeepfakeBench/logs/training/dual_branch_patch_2026-07-07-08-37-20/test/avg/ckpt_best.pth
 
 gpu:
-  - 2
+  - 5
   # - 1
