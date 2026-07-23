@@ -79,6 +79,20 @@ def get_test_metrics(y_pred, y_true, img_names):
     eer = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
     # ap
     ap = metrics.average_precision_score(y_true, y_pred)
+    # low-FPR operating points (fake = positive): TPR while wrongly flagging
+    # at most 1% / 5% of real samples, the real-side view (fraction of reals
+    # kept when 95% of fakes must be caught), and the standardized partial
+    # AUC of the FPR<=5% regime. roc_curve returns fpr sorted ascending with
+    # fpr[0]=0 and tpr[-1]=1, so the index lookups below are always valid.
+    def _tpr_at_fpr(target):
+        return float(tpr[np.searchsorted(fpr, target, side='right') - 1])
+    tpr_fpr1 = _tpr_at_fpr(0.01)
+    tpr_fpr5 = _tpr_at_fpr(0.05)
+    tnr_tpr95 = float(1.0 - fpr[np.searchsorted(tpr, 0.95, side='left')])
+    try:
+        pauc5 = metrics.roc_auc_score(y_true, y_pred, max_fpr=0.05)
+    except ValueError:
+        pauc5 = float('nan')
     # acc
     prediction_class = (y_pred > 0.5).astype(int)
     correct = (prediction_class == np.clip(y_true, a_min=0, a_max=1)).sum().item()
@@ -94,4 +108,7 @@ def get_test_metrics(y_pred, y_true, img_names):
         # video-level methods
         v_auc=auc
 
-    return {'acc': acc, 'auc': auc, 'eer': eer, 'ap': ap, 'pred': y_pred, 'video_auc': v_auc, 'label': y_true}
+    return {'acc': acc, 'auc': auc, 'eer': eer, 'ap': ap,
+            'tpr@1%fpr': tpr_fpr1, 'tpr@5%fpr': tpr_fpr5,
+            'tnr@95%tpr': tnr_tpr95, 'pauc@5%fpr': pauc5,
+            'pred': y_pred, 'video_auc': v_auc, 'label': y_true}
