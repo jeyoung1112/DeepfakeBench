@@ -85,6 +85,10 @@ def get_test_metrics(y_pred, y_true, img_names):
     acc = correct / len(prediction_class)
     if type(img_names[0]) is not list:
         # calculate video-level auc for the frame-level methods.
+        # img_names may be longer than y_pred when the test loader uses
+        # drop_last=True (e.g. DeepFakeDetection); the loader is unshuffled,
+        # so the first len(y_pred) names align with the predictions.
+        img_names = img_names[:len(y_pred)]
         v_auc, _ = get_video_metrics(img_names, y_pred, y_true)
     else:
         # video-level methods
